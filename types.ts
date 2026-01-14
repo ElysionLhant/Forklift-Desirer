@@ -40,7 +40,7 @@ export interface PlacedItem {
 }
 
 export interface PackingResult {
-  containerType: '20GP' | '40GP' | '40HQ';
+  containerType: string;
   placedItems: PlacedItem[];
   unplacedItems: CargoItem[];
   totalVolume: number;
@@ -67,6 +67,7 @@ export interface AIConfig {
   modelName: string;
 }
 
+// Updated default model to gemini-3-flash-preview
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'gemini',
   apiKey: '',

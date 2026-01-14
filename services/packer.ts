@@ -44,8 +44,11 @@ const checkValidity = (
   placedItems: PlacedItem[]
 ): boolean => {
   if (pos.x + dim.l > containerDim.l) return false;
+  
+  // Height check: Must leave 15cm for forklift operation
   const maxStackHeight = containerDim.h - FORKLIFT_LIFT_MARGIN;
   if (pos.y + dim.h > maxStackHeight) return false;
+  
   if (pos.z + dim.w > containerDim.w) return false;
 
   for (const item of placedItems) {
@@ -72,6 +75,7 @@ const checkValidity = (
       }
       if ((totalSupportArea / requiredArea) < 0.70) return false;
   }
+
   return true;
 };
 
@@ -152,6 +156,7 @@ const packSingleContainer = (
             anchors.push({ x: anc.x, y: anc.y + finalDim.height, z: anc.z });
             anchors.push({ x: anc.x, y: anc.y, z: anc.z + finalDim.width });
             anchors.push({ x: anc.x + finalDim.length, y: anc.y, z: anc.z });
+
             anchors.sort((a, b) => (a.x - b.x) || (a.y - b.y) || (a.z - b.z));
             anchors = anchors.filter(a => a.x < cDim.l && a.y < (cDim.h - FORKLIFT_LIFT_MARGIN) && a.z < cDim.w);
         } else {
@@ -171,7 +176,7 @@ const packSingleContainer = (
             volumeUtilization: (usedVolume / containerSpec.volume) * 100,
             totalWeight: currentWeight,
             weightUtilization: (currentWeight / containerSpec.maxWeight) * 100,
-            totalCargoCount: placedItems.length,
+            totalCargoCount: placedItems.length
         },
         remainingBoxes
     };
@@ -224,34 +229,53 @@ export const calculateShipment = (
           if (result.placedItems.length === 0) break;
       }
   } else {
-      // SMART_MIX: Hierarchical Efficiency (20GP < 40GP < 40HQ)
       while (boxesToPack.length > 0) {
           containerCount++;
           
-          const sim20 = packSingleContainer(spec20GP, boxesToPack, containerCount);
-          
-          // 1. If 20GP completes all remaining cargo, use it (cheapest).
-          if (sim20.remainingBoxes.length === 0) {
-              shipmentResults.push(sim20.result);
+          // 1. Try 20GP first if remaining volume is low
+          const test20 = packSingleContainer(spec20GP, boxesToPack, containerCount);
+          if (test20.remainingBoxes.length === 0) {
+              shipmentResults.push(test20.result);
               boxesToPack = [];
               break;
           }
 
-          const sim40GP = packSingleContainer(spec40GP, boxesToPack, containerCount);
-          const sim40HQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
-
-          // 2. Determine best move between 40GP and 40HQ
-          // Hierarchy: 40GP is "cheaper" than 40HQ. We only use 40HQ if it fits significantly more or 40GP fails.
-          if (sim40HQ.remainingBoxes.length < sim40GP.remainingBoxes.length || sim40HQ.result.volumeUtilization > sim40GP.result.volumeUtilization + 5) {
-              shipmentResults.push(sim40HQ.result);
-              boxesToPack = sim40HQ.remainingBoxes;
+          // 2. Determine if HQ is mandatory for height (> 222cm)
+          const hasExtraTallCargo = boxesToPack.some(b => b.dim.h > (spec40GP.dimensions.height - OPERATION_BUFFER - FORKLIFT_LIFT_MARGIN));
+          
+          if (hasExtraTallCargo) {
+              const { result, remainingBoxes } = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+              shipmentResults.push(result);
+              boxesToPack = remainingBoxes;
           } else {
-              shipmentResults.push(sim40GP.result);
-              boxesToPack = sim40GP.remainingBoxes;
+              // 3. Compare 40GP and 40HQ efficiency
+              const simGP = packSingleContainer(spec40GP, boxesToPack, containerCount);
+              const simHQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+
+              const hqEfficiencyAdvantage = (simGP.remainingBoxes.length - simHQ.remainingBoxes.length) / boxesToPack.length;
+              const hqCompletesRemainder = simHQ.remainingBoxes.length === 0 && simGP.remainingBoxes.length > 0;
+
+              // Only use HQ if it captures significantly more cargo (>10% more) or completes the manifest
+              if (hqCompletesRemainder || hqEfficiencyAdvantage > 0.10) {
+                  shipmentResults.push(simHQ.result);
+                  boxesToPack = simHQ.remainingBoxes;
+              } else {
+                  shipmentResults.push(simGP.result);
+                  boxesToPack = simGP.remainingBoxes;
+              }
           }
           
           if (shipmentResults[shipmentResults.length - 1].placedItems.length === 0) break;
       }
+  }
+
+  if (boxesToPack.length > 0 && shipmentResults.length > 0) {
+      const map = new Map<string, CargoItem>();
+      boxesToPack.forEach(b => {
+          if (map.has(b.cargoId)) map.get(b.cargoId)!.quantity++;
+          else map.set(b.cargoId, { ...b.originalItem, quantity: 1 });
+      });
+      shipmentResults[shipmentResults.length - 1].unplacedItems = Array.from(map.values());
   }
 
   return shipmentResults;
