@@ -1,11 +1,12 @@
+
 import { CargoItem, ContainerSpec, PlacedItem, PackingResult } from '../types';
 import { CONTAINERS } from '../constants';
 
-// 运行公差/缓冲 (cm)
 const OPERATION_BUFFER = 2; 
+const FORKLIFT_LIFT_MARGIN = 15;
 
 interface BoxToPack {
-  id: string; // 内部唯一ID
+  id: string;
   cargoId: string;
   dim: { l: number; w: number; h: number };
   wt: number;
@@ -30,17 +31,9 @@ const calculateSupportArea = (
   return xOverlap * zOverlap;
 };
 
-/**
- * 校验货物是否能物理通过集装箱门洞
- * 货物进入时通常是长度方向(L)平行于集装箱长度，因此需要校验 W 和 H 是否小于门洞
- */
 const canFitThroughDoor = (box: BoxToPack, door: { width: number, height: number }): boolean => {
-  // 检查原始方向是否能过门
   const fitsNormal = box.dim.w <= door.width && box.dim.h <= door.height;
-  // 检查旋转90度后是否能过门 (交换宽和高的情况通常不现实，因为重力，但这里支持 W/L 交换)
-  // 如果是 L/W 交换进入：
   const fitsRotated = box.dim.l <= door.width && box.dim.h <= door.height;
-  
   return fitsNormal || fitsRotated;
 };
 
@@ -50,12 +43,14 @@ const checkValidity = (
   containerDim: { l: number; w: number; h: number },
   placedItems: PlacedItem[]
 ): boolean => {
-  // 1. 边界检查
   if (pos.x + dim.l > containerDim.l) return false;
-  if (pos.y + dim.h > containerDim.h) return false;
+  
+  // Height check: Must leave 15cm for forklift operation
+  const maxStackHeight = containerDim.h - FORKLIFT_LIFT_MARGIN;
+  if (pos.y + dim.h > maxStackHeight) return false;
+  
   if (pos.z + dim.w > containerDim.w) return false;
 
-  // 2. 静态碰撞检查
   for (const item of placedItems) {
     const intersectX = pos.x < item.position.x + item.dimensions.length && pos.x + dim.l > item.position.x;
     const intersectY = pos.y < item.position.y + item.dimensions.height && pos.y + dim.h > item.position.y;
@@ -63,18 +58,15 @@ const checkValidity = (
     if (intersectX && intersectY && intersectZ) return false;
   }
 
-  // 3. 支撑检查
   if (pos.y > 0) {
       let totalSupportArea = 0;
       const requiredArea = dim.l * dim.w;
-
       for (const item of placedItems) {
         if (Math.abs((item.position.y + item.dimensions.height) - pos.y) < 0.1) {
            const area = calculateSupportArea(
              pos.x, pos.z, dim.l, dim.w,
              item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
            );
-           
            if (area > 0) {
                if (item.unstackable) return false;
                totalSupportArea += area;
@@ -82,17 +74,6 @@ const checkValidity = (
         }
       }
       if ((totalSupportArea / requiredArea) < 0.70) return false;
-  }
-
-  // 4. 路径通达度检查 (叉车装载路径)
-  const pathStartX = pos.x + dim.l;
-  const epsilon = 0.5;
-
-  for (const item of placedItems) {
-      if (item.position.x + item.dimensions.length <= pathStartX - epsilon) continue;
-      const zOverlap = Math.max(0, Math.min(pos.z + dim.w, item.position.z + item.dimensions.width) - Math.max(pos.z, item.position.z));
-      const yOverlap = Math.max(0, Math.min(pos.y + dim.h, item.position.y + item.dimensions.height) - Math.max(pos.y, item.position.y));
-      if (zOverlap > 5 && yOverlap > 5) return false;
   }
 
   return true;
@@ -116,15 +97,12 @@ const packSingleContainer = (
     let currentWeight = 0;
 
     for (const box of boxes) {
-        // A. 重量校验
         if (currentWeight + box.wt > containerSpec.maxWeight) {
             remainingBoxes.push(box);
             continue;
         }
 
-        // B. 门洞尺寸校验 (核心逻辑更新)
         if (!canFitThroughDoor(box, containerSpec.doorDimensions)) {
-            console.warn(`Item ${box.name} is too large for the door of ${containerSpec.type}`);
             remainingBoxes.push(box);
             continue;
         }
@@ -135,8 +113,6 @@ const packSingleContainer = (
 
         for (let i = 0; i < anchors.length; i++) {
             const anc = anchors[i];
-            
-            // 方向 A: 原始 L, W
             if (checkValidity(anc, box.dim, cDim, placedItems)) {
                 const score = (anc.x * 100000) + (anc.y * 1000) + anc.z;
                 if (score < bestScore) {
@@ -145,8 +121,6 @@ const packSingleContainer = (
                     bestOrientationIsRotated = false;
                 }
             }
-            
-            // 方向 B: 交换 L, W (旋转)
             const rotDim = { l: box.dim.w, w: box.dim.l, h: box.dim.h };
             if (checkValidity(anc, rotDim, cDim, placedItems)) {
                 const score = (anc.x * 100000) + (anc.y * 1000) + anc.z;
@@ -179,25 +153,12 @@ const packSingleContainer = (
             });
             currentWeight += box.wt;
 
-            // 生成新锚点
             anchors.push({ x: anc.x, y: anc.y + finalDim.height, z: anc.z });
             anchors.push({ x: anc.x, y: anc.y, z: anc.z + finalDim.width });
             anchors.push({ x: anc.x + finalDim.length, y: anc.y, z: anc.z });
 
-            anchors.sort((a, b) => {
-                 if (Math.abs(a.x - b.x) > 1) return a.x - b.x;
-                 if (Math.abs(a.y - b.y) > 1) return a.y - b.y;
-                 return a.z - b.z;
-            });
-            
-            anchors = anchors.filter(a => 
-                a.x < cDim.l && a.y < cDim.h && a.z < cDim.w &&
-                !placedItems.some(item => 
-                    a.x >= item.position.x && a.x < item.position.x + item.dimensions.length &&
-                    a.y >= item.position.y && a.y < item.position.y + item.dimensions.height &&
-                    a.z >= item.position.z && a.z < item.position.z + item.dimensions.width
-                )
-            );
+            anchors.sort((a, b) => (a.x - b.x) || (a.y - b.y) || (a.z - b.z));
+            anchors = anchors.filter(a => a.x < cDim.l && a.y < (cDim.h - FORKLIFT_LIFT_MARGIN) && a.z < cDim.w);
         } else {
             remainingBoxes.push(box);
         }
@@ -223,8 +184,7 @@ const packSingleContainer = (
 
 export const calculateShipment = (
   strategy: 'SMART_MIX' | ContainerSpec | ContainerSpec[],
-  cargoItems: CargoItem[],
-  maxContainers?: number
+  cargoItems: CargoItem[]
 ): PackingResult[] => {
   
   let boxesToPack: BoxToPack[] = [];
@@ -243,15 +203,15 @@ export const calculateShipment = (
     }
   });
 
-  boxesToPack.sort((a, b) => {
-    if (b.dim.h !== a.dim.h) return b.dim.h - a.dim.h;
-    if (b.dim.w !== a.dim.w) return b.dim.w - a.dim.w;
-    return b.dim.l - a.dim.l;
-  });
+  boxesToPack.sort((a, b) => (b.dim.h - a.dim.h) || (b.dim.l * b.dim.w - a.dim.l * a.dim.w));
 
   const shipmentResults: PackingResult[] = [];
   let containerCount = 0;
   
+  const spec20GP = CONTAINERS.find(c => c.type === '20GP')!;
+  const spec40GP = CONTAINERS.find(c => c.type === '40GP')!;
+  const spec40HQ = CONTAINERS.find(c => c.type === '40HQ')!;
+
   if (Array.isArray(strategy)) {
       for (const spec of strategy) {
           if (boxesToPack.length === 0) break;
@@ -260,51 +220,63 @@ export const calculateShipment = (
           shipmentResults.push(result);
           boxesToPack = remainingBoxes;
       }
-      return finishShipment(shipmentResults, boxesToPack);
+  } else if (strategy !== 'SMART_MIX') {
+      while (boxesToPack.length > 0) {
+          containerCount++;
+          const { result, remainingBoxes } = packSingleContainer(strategy, boxesToPack, containerCount);
+          shipmentResults.push(result);
+          boxesToPack = remainingBoxes;
+          if (result.placedItems.length === 0) break;
+      }
+  } else {
+      while (boxesToPack.length > 0) {
+          containerCount++;
+          
+          // 1. Try 20GP first if remaining volume is low
+          const test20 = packSingleContainer(spec20GP, boxesToPack, containerCount);
+          if (test20.remainingBoxes.length === 0) {
+              shipmentResults.push(test20.result);
+              boxesToPack = [];
+              break;
+          }
+
+          // 2. Determine if HQ is mandatory for height (> 222cm)
+          const hasExtraTallCargo = boxesToPack.some(b => b.dim.h > (spec40GP.dimensions.height - OPERATION_BUFFER - FORKLIFT_LIFT_MARGIN));
+          
+          if (hasExtraTallCargo) {
+              const { result, remainingBoxes } = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+              shipmentResults.push(result);
+              boxesToPack = remainingBoxes;
+          } else {
+              // 3. Compare 40GP and 40HQ efficiency
+              const simGP = packSingleContainer(spec40GP, boxesToPack, containerCount);
+              const simHQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+
+              const hqEfficiencyAdvantage = (simGP.remainingBoxes.length - simHQ.remainingBoxes.length) / boxesToPack.length;
+              const hqCompletesRemainder = simHQ.remainingBoxes.length === 0 && simGP.remainingBoxes.length > 0;
+
+              // Only use HQ if it captures significantly more cargo (>10% more) or completes the manifest
+              if (hqCompletesRemainder || hqEfficiencyAdvantage > 0.10) {
+                  shipmentResults.push(simHQ.result);
+                  boxesToPack = simHQ.remainingBoxes;
+              } else {
+                  shipmentResults.push(simGP.result);
+                  boxesToPack = simGP.remainingBoxes;
+              }
+          }
+          
+          if (shipmentResults[shipmentResults.length - 1].placedItems.length === 0) break;
+      }
   }
 
-  const containerLimit = maxContainers || 999;
-  const spec40HQ = CONTAINERS.find(c => c.type === '40HQ')!;
-  const spec40GP = CONTAINERS.find(c => c.type === '40GP')!;
-  const spec20GP = CONTAINERS.find(c => c.type === '20GP')!;
-  
-  const primarySpec = strategy === 'SMART_MIX' ? spec40HQ : strategy;
-
-  while (boxesToPack.length > 0 && containerCount < containerLimit) {
-    containerCount++;
-    let activeSpec = primarySpec;
-
-    if (strategy === 'SMART_MIX') {
-        const packHQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
-        if (packHQ.remainingBoxes.length === 0) {
-            const pack20 = packSingleContainer(spec20GP, boxesToPack, containerCount);
-            if (pack20.remainingBoxes.length === 0) activeSpec = spec20GP; 
-            else {
-                 const pack40 = packSingleContainer(spec40GP, boxesToPack, containerCount);
-                 if (pack40.remainingBoxes.length === 0) activeSpec = spec40GP;
-                 else activeSpec = spec40HQ;
-            }
-        } else activeSpec = spec40HQ;
-    }
-
-    const { result, remainingBoxes } = packSingleContainer(activeSpec, boxesToPack, containerCount);
-    shipmentResults.push(result);
-    boxesToPack = remainingBoxes;
-
-    if (result.placedItems.length === 0 && boxesToPack.length > 0) boxesToPack.shift(); 
+  if (boxesToPack.length > 0 && shipmentResults.length > 0) {
+      const map = new Map<string, CargoItem>();
+      boxesToPack.forEach(b => {
+          if (map.has(b.cargoId)) map.get(b.cargoId)!.quantity++;
+          else map.set(b.cargoId, { ...b.originalItem, quantity: 1 });
+      });
+      shipmentResults[shipmentResults.length - 1].unplacedItems = Array.from(map.values());
   }
 
-  return finishShipment(shipmentResults, boxesToPack);
-};
-
-const finishShipment = (results: PackingResult[], unplaced: BoxToPack[]): PackingResult[] => {
-    if (unplaced.length > 0 && results.length > 0) {
-        const map = new Map<string, CargoItem>();
-        unplaced.forEach(b => {
-            if (map.has(b.cargoId)) map.get(b.cargoId)!.quantity++;
-            else map.set(b.cargoId, { ...b.originalItem, quantity: 1 });
-        });
-        results[results.length - 1].unplacedItems = Array.from(map.values());
-    }
-    return results;
+  return shipmentResults;
 };

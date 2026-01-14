@@ -1,3 +1,4 @@
+
 // Dimensions are in cm, Weight in kg
 export interface Dimensions {
   length: number;
@@ -12,31 +13,30 @@ export interface CargoItem {
   weight: number;
   color: string;
   quantity: number;
-  unstackable?: boolean; // New property
+  unstackable?: boolean;
 }
 
 export interface ContainerSpec {
   type: '20GP' | '40GP' | '40HQ';
   name: string;
-  dimensions: Dimensions; // Internal dimensions
-  doorDimensions: { width: number; height: number }; // Door opening dimensions
-  maxWeight: number; // kg
-  volume: number; // m3
-  basePrice: number; // Estimated freight cost for demo
+  dimensions: Dimensions;
+  doorDimensions: { width: number; height: number };
+  maxWeight: number;
+  volume: number;
 }
 
 export interface PlacedItem {
-  id: string; // unique placement id
+  id: string;
   cargoId: string;
-  position: { x: number; y: number; z: number }; // Top-left-front corner relative to container origin
-  dimensions: Dimensions; // Actual orientation dimensions
-  rotation: boolean; // true if rotated 90 deg on Y axis
+  position: { x: number; y: number; z: number };
+  dimensions: Dimensions;
+  rotation: boolean;
   color: string;
   name: string;
   weight: number;
-  sequence: number; // Loading order
-  containerIndex: number; // Explicitly track which container index this item belongs to
-  unstackable?: boolean; // New property to track placement constraints
+  sequence: number;
+  containerIndex: number;
+  unstackable?: boolean;
 }
 
 export interface PackingResult {
@@ -58,19 +58,18 @@ export interface ChatMsg {
   isError?: boolean;
 }
 
-// --- AI CONFIGURATION TYPES ---
-
 export type AIProvider = 'gemini' | 'openai' | 'ollama' | 'lmstudio';
 
 export interface AIConfig {
   provider: AIProvider;
   apiKey?: string;
-  baseUrl?: string; // For Local/OpenAI
+  baseUrl?: string;
   modelName: string;
 }
 
+// Updated default model to gemini-3-flash-preview
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'gemini',
-  apiKey: '', // User must provide or use env
-  modelName: 'gemini-2.0-flash',
+  apiKey: '',
+  modelName: 'gemini-3-flash-preview',
 };
