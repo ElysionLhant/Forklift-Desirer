@@ -229,38 +229,115 @@ const packSingleContainer = (
         let bestAnchorIndex = -1;
         let bestOrientationIsRotated = false;
         let bestScore = Number.MAX_SAFE_INTEGER;
+        let bestPos = { x: 0, y: 0, z: 0 };
+        
+        // Bonus for touching an item of the exact same Cargo ID (Group Affinity)
+        // Enough to overcome Z-sorting (width ~235), but less than Y-sorting (1000)
+        const ADHESION_BONUS = 600; 
+
+        // Helper to optimize position by sliding left (decreasing Z)
+        const optimizeZ = (startPos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}) => {
+            let optimizedZ = startPos.z;
+            const step = 5; 
+            while (optimizedZ - step >= 0) {
+                 const testPos = { ...startPos, z: optimizedZ - step };
+                 if (checkValidity(testPos, dim, cDim, placedItems)) {
+                     optimizedZ -= step;
+                 } else {
+                     break;
+                 }
+            }
+            return optimizedZ;
+        };
+
+        const hasSameTypeNeighbor = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}, cId: string) => {
+            // Check for proximity (within 1cm) to any placed item with same Cargo ID
+            const PROXIMITY = 1.0;
+            const bounds = {
+                minX: pos.x - PROXIMITY, maxX: pos.x + dim.l + PROXIMITY,
+                minY: pos.y - PROXIMITY, maxY: pos.y + dim.h + PROXIMITY,
+                minZ: pos.z - PROXIMITY, maxZ: pos.z + dim.w + PROXIMITY
+            };
+            
+            for (const item of placedItems) {
+                if (item.cargoId !== cId) continue;
+                
+                const itemMinX = item.position.x;
+                const itemMaxX = item.position.x + item.dimensions.length;
+                const itemMinY = item.position.y;
+                const itemMaxY = item.position.y + item.dimensions.height;
+                const itemMinZ = item.position.z;
+                const itemMaxZ = item.position.z + item.dimensions.width;
+
+                if (bounds.minX < itemMaxX && bounds.maxX > itemMinX &&
+                    bounds.minY < itemMaxY && bounds.maxY > itemMinY &&
+                    bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         for (let i = 0; i < anchors.length; i++) {
             const anc = anchors[i];
+            
+            // Check Normal Orientation
             if (checkValidity(anc, box.dim, cDim, placedItems)) {
-                const score = (anc.x * 100000) + (anc.y * 1000) + anc.z;
+                // Optimization: Try to slide left (reduce Z)
+                const optZ = optimizeZ(anc, box.dim);
+                const finalPos = { x: anc.x, y: anc.y, z: optZ };
+                
+                // Base score: X (Depth) > Y (Vertical) > Z (Horizontal)
+                // Minimizing X fills back first. Minimizing Y fills floor first. Minimizing Z fills left first.
+                let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+                
+                // Apply Adhesion Bonus
+                if (hasSameTypeNeighbor(finalPos, box.dim, box.cargoId)) {
+                    score -= ADHESION_BONUS;
+                }
+
                 if (score < bestScore) {
                     bestScore = score;
                     bestAnchorIndex = i;
                     bestOrientationIsRotated = false;
+                    bestPos = finalPos;
                 }
             }
+            
+            // Check Rotated Orientation
             const rotDim = { l: box.dim.w, w: box.dim.l, h: box.dim.h };
             if (checkValidity(anc, rotDim, cDim, placedItems)) {
-                const score = (anc.x * 100000) + (anc.y * 1000) + anc.z;
+                // Optimization: Try to slide left (reduce Z)
+                const optZ = optimizeZ(anc, rotDim);
+                const finalPos = { x: anc.x, y: anc.y, z: optZ };
+
+                let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+
+                if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
+                    score -= ADHESION_BONUS;
+                }
+                
                 if (score < bestScore) {
                     bestScore = score;
                     bestAnchorIndex = i;
                     bestOrientationIsRotated = true;
+                    bestPos = finalPos;
                 }
             }
         }
 
         if (bestAnchorIndex !== -1) {
-            const anc = anchors[bestAnchorIndex];
             const finalDim = bestOrientationIsRotated 
                 ? { length: box.dim.w, width: box.dim.l, height: box.dim.h }
                 : { length: box.dim.l, width: box.dim.w, height: box.dim.h };
+            
+            // Use the Optimized Position (bestPos) instead of the Anchor's original position
+            const finalPos = bestPos; 
 
             placedItems.push({
                 id: `c${containerIndex}-b${placedItems.length}`,
                 cargoId: box.cargoId,
-                position: { x: anc.x, y: anc.y, z: anc.z },
+                position: { x: finalPos.x, y: finalPos.y, z: finalPos.z },
                 dimensions: finalDim,
                 rotation: bestOrientationIsRotated,
                 color: box.color,
@@ -272,9 +349,10 @@ const packSingleContainer = (
             });
             currentWeight += box.wt;
 
-            anchors.push({ x: anc.x, y: anc.y + finalDim.height, z: anc.z });
-            anchors.push({ x: anc.x, y: anc.y, z: anc.z + finalDim.width });
-            anchors.push({ x: anc.x + finalDim.length, y: anc.y, z: anc.z });
+            // Generate new anchors from the Final Position
+            anchors.push({ x: finalPos.x, y: finalPos.y + finalDim.height, z: finalPos.z });
+            anchors.push({ x: finalPos.x, y: finalPos.y, z: finalPos.z + finalDim.width });
+            anchors.push({ x: finalPos.x + finalDim.length, y: finalPos.y, z: finalPos.z });
 
             anchors.sort((a, b) => (a.x - b.x) || (a.y - b.y) || (a.z - b.z));
             anchors = anchors.filter(a => a.x < cDim.l && a.y < (cDim.h - FORKLIFT_LIFT_MARGIN) && a.z < cDim.w);
