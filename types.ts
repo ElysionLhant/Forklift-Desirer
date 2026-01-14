@@ -58,7 +58,7 @@ export interface ChatMsg {
   isError?: boolean;
 }
 
-export type AIProvider = 'gemini' | 'openai' | 'ollama' | 'lmstudio';
+export type AIProvider = 'openai' | 'ollama' | 'lmstudio'; // Removed explicit 'gemini' as it can be used via openai compatible or just deprecated
 
 export interface AIConfig {
   provider: AIProvider;
@@ -67,9 +67,10 @@ export interface AIConfig {
   modelName: string;
 }
 
-// Updated default model to gemini-3-flash-preview
+// Updated default model to a local-first approach
 export const DEFAULT_AI_CONFIG: AIConfig = {
-  provider: 'gemini',
+  provider: 'ollama',
   apiKey: '',
-  modelName: 'gemini-3-flash-preview',
+  baseUrl: 'http://localhost:11434',
+  modelName: 'llama3',
 };

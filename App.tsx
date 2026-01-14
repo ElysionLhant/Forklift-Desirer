@@ -6,7 +6,7 @@ import { Container3D } from './components/Container3D';
 import { CONTAINERS, MOCK_CARGO_COLORS } from './constants';
 import { CargoItem, PackingResult, ChatMsg, AIConfig, DEFAULT_AI_CONFIG } from './types';
 import { calculateShipment } from './services/packer';
-import { AIService, extractCargoJSON } from './services/geminiService';
+import { AIService, extractCargoJSON } from './services/aiService';
 
 type StrategyMode = 'SMART_MIX' | 'CUSTOM_PLAN' | 'SINGLE';
 
@@ -28,6 +28,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<{url: string, base64: string, type: 'image'|'file'}[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [pendingCargoUpdate, setPendingCargoUpdate] = useState<any[] | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -37,6 +38,14 @@ export default function App() {
         try { setAiConfig(JSON.parse(savedConfig)); } catch (e) {}
     }
   }, []);
+
+  useEffect(() => {
+     if (aiConfig.provider === 'ollama') {
+         AIService.getOllamaModels(aiConfig.baseUrl).then(models => {
+             if (models.length > 0) setOllamaModels(models);
+         });
+     }
+  }, [aiConfig.provider, aiConfig.baseUrl]);
 
   useEffect(() => {
      localStorage.setItem('forklift_desirer_config', JSON.stringify(aiConfig));
@@ -177,15 +186,48 @@ export default function App() {
                   <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
                       <select value={aiConfig.provider} onChange={e => setAiConfig({...aiConfig, provider: e.target.value as any})} className="w-full p-2 border rounded-md">
-                          <option value="gemini">Google Gemini (Cloud)</option>
-                          <option value="openai">OpenAI Compatible</option>
                           <option value="ollama">Ollama (Local)</option>
+                          <option value="openai">OpenAI Compatible (Cloud/Local)</option>
                       </select>
                   </div>
-                  <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
-                      <input type="text" value={aiConfig.modelName} onChange={e => setAiConfig({...aiConfig, modelName: e.target.value})} className="w-full p-2 border rounded-md" placeholder="e.g. gemini-3-flash-preview"/>
-                  </div>
+
+                  {aiConfig.provider === 'ollama' && (
+                    <>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                            <input type="text" value={aiConfig.baseUrl || 'http://localhost:11434'} onChange={e => setAiConfig({...aiConfig, baseUrl: e.target.value})} className="w-full p-2 border rounded-md" placeholder="http://localhost:11434"/>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                            {ollamaModels.length > 0 ? (
+                                <select value={aiConfig.modelName} onChange={e => setAiConfig({...aiConfig, modelName: e.target.value})} className="w-full p-2 border rounded-md">
+                                    <option value="" disabled>Select a model</option>
+                                    {ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                            ): (
+                                <input type="text" value={aiConfig.modelName} onChange={e => setAiConfig({...aiConfig, modelName: e.target.value})} className="w-full p-2 border rounded-md" placeholder="e.g. llama3"/>
+                            )}
+                            {ollamaModels.length === 0 && <p className="text-xs text-gray-500 mt-1">Could not detect models automatically.</p>}
+                        </div>
+                    </>
+                  )}
+
+                  {aiConfig.provider === 'openai' && (
+                    <>
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                          <input type="text" value={aiConfig.baseUrl || 'https://api.openai.com/v1'} onChange={e => setAiConfig({...aiConfig, baseUrl: e.target.value})} className="w-full p-2 border rounded-md" placeholder="https://api.openai.com/v1"/>
+                      </div>
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                          <input type="password" value={aiConfig.apiKey || ''} onChange={e => setAiConfig({...aiConfig, apiKey: e.target.value})} className="w-full p-2 border rounded-md" placeholder="sk-..."/>
+                      </div>
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                          <input type="text" value={aiConfig.modelName} onChange={e => setAiConfig({...aiConfig, modelName: e.target.value})} className="w-full p-2 border rounded-md" placeholder="e.g. gpt-4o"/>
+                      </div>
+                    </>
+                  )}
                   <div className="pt-2">
                       <button onClick={() => setShowSettings(false)} className="w-full bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700">Save Configuration</button>
                   </div>

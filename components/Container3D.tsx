@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Text } from '@react-three/drei';
+import { OrbitControls, Text, Edges } from '@react-three/drei';
 import * as THREE from 'three';
 import { PlacedItem, ContainerSpec, PackingResult } from '../types';
 import { CONTAINERS } from '../constants';
@@ -195,6 +195,7 @@ const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containerWidth,
         <mesh castShadow receiveShadow>
             <boxGeometry args={[l, h, w]} />
             <meshStandardMaterial color={item.color} roughness={0.6} metalness={0.1} />
+            <Edges color="#333" threshold={15} />
         </mesh>
       </group>
       {showCarrier && (

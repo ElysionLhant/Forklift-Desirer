@@ -5,6 +5,16 @@ import { CONTAINERS } from '../constants';
 const OPERATION_BUFFER = 2; 
 const FORKLIFT_LIFT_MARGIN = 15;
 
+// Forklift spec in cm (consistent with Container3D)
+const FORKLIFT_OH_GUARD_HEIGHT = 210; // Overhead guard height often defines clearance. 
+// Container3D uses: chassisHeight 1.4m, mastHeight 1.6m. 
+// Standard container forklift often < 2.2m. 20GP door is 228cm.
+// Let's use the visual values from Container3D for collision consistency.
+const FORKLIFT_WIDTH = 110; // Standard forklift width (e.g. Toyota 8-Series is ~107-115cm)
+const FORKLIFT_MAST_HEIGHT = 160;   // The vertical part that might hit things
+const FORKLIFT_CHASSIS_HEIGHT = 140; // The body
+const WALL_BUFFER = 2; // Minimal buffer for walls (simulating skilled operation)
+
 interface BoxToPack {
   id: string;
   cargoId: string;
@@ -37,6 +47,112 @@ const canFitThroughDoor = (box: BoxToPack, door: { width: number, height: number
   return fitsNormal || fitsRotated;
 };
 
+const checkForkliftAccess = (
+  targetPos: { x: number; y: number; z: number },
+  boxDim: { l: number; w: number; h: number },
+  containerDim: { l: number; w: number; h: number },
+  placedItems: PlacedItem[]
+): boolean => {
+    // 1. Define Candidate Range for Chassis Center based on reach and walls
+    // The forklift has some ability to shift sideways (side shift) or approach at slight angle.
+    // We search for ANY valid chassis Z-position that allows the forks to pick up the box.
+    const boxCenterZ = targetPos.z + (boxDim.w / 2);
+    const halfChassisW = FORKLIFT_WIDTH / 2;
+    const SIDE_SHIFT = 50; // Increased to 50cm to simulate skilled operation/angle approach
+
+    // Wall constraints
+    // Center must be within [halfChassisW + Buffer, Width - halfChassisW - Buffer]
+    const minWallZ = halfChassisW + WALL_BUFFER;
+    const maxWallZ = containerDim.w - halfChassisW - WALL_BUFFER;
+
+    // Reach constraints
+    // Chassis center must be close enough to box center
+    const minReachZ = boxCenterZ - SIDE_SHIFT;
+    const maxReachZ = boxCenterZ + SIDE_SHIFT;
+
+    // Intersection to find initial valid range
+    // We check [minStart, maxStart]
+    let validMinZ = Math.max(minWallZ, minReachZ);
+    let validMaxZ = Math.min(maxWallZ, maxReachZ);
+    
+    // If even with shifting we hit walls or can't reach, it's invalid
+    if (validMinZ > validMaxZ + 0.01) return false; 
+
+    // 2. Filter Candidate Range against Obstacles in the Path
+    // Path: from box face (startX) to Door (endX)
+    const startX = targetPos.x + boxDim.l;
+    const endX = containerDim.l;
+    
+    // We maintain a list of valid intervals for the chassis center Z.
+    // Initially just one interval: [validMinZ, validMaxZ]
+    let validIntervals: {min: number, max: number}[] = [{ min: validMinZ, max: validMaxZ }];
+
+    for (const item of placedItems) {
+        // Broad Phase: If item is completely behind the path (closer to wall than startX), ignore
+        if (item.position.x + item.dimensions.length <= startX) continue;
+        // If item is completely outside the door (impossible but safe), ignore
+        if (item.position.x >= endX) continue;
+
+        // X Overlap Check
+        const itemMinX = item.position.x;
+        const itemMaxX = item.position.x + item.dimensions.length;
+        // Check if item is in the path corridor [startX, endX]
+        const xOverlap = Math.max(0, Math.min(endX, itemMaxX) - Math.max(startX, itemMinX));
+        if (xOverlap <= 0.1) continue; 
+        
+        // Y Overlap Check
+        // Forklift mass occupies 0 to FORKLIFT_MAST_HEIGHT
+        const itemMinY = item.position.y;
+        const itemMaxY = item.position.y + item.dimensions.height;
+        const yOverlap = Math.max(0, Math.min(FORKLIFT_MAST_HEIGHT, itemMaxY) - Math.max(0, itemMinY));
+        if (yOverlap <= 0.1) continue;
+
+        // This item is an obstacle in the X-Path.
+        // It blocks any chassis Z-position where the chassis body overlaps the item.
+        // Item Z Range: [itemMinZ, itemMaxZ]
+        // Chassis (width W) at center C covers [C - W/2, C + W/2].
+        // Collision if [C - W/2, C + W/2] overlaps [itemMinZ, itemMaxZ].
+        // Rewrite as: Forbidden C Range = [itemMinZ - W/2, itemMaxZ + W/2]
+        
+        const itemMinZ = item.position.z;
+        const itemMaxZ = item.position.z + item.dimensions.width;
+        
+        const forbiddenMin = itemMinZ - halfChassisW; // Expanded by chassis radius
+        const forbiddenMax = itemMaxZ + halfChassisW;
+
+        // Subtract forbidden range from validIntervals
+        const nextIntervals: {min: number, max: number}[] = [];
+        for (const interval of validIntervals) {
+             // Case 1: Forbidden covers entire interval -> Remove interval completely
+             if (forbiddenMin <= interval.min && forbiddenMax >= interval.max) continue;
+             
+             // Case 2: No overlap -> Keep interval as is
+             if (forbiddenMax <= interval.min || forbiddenMin >= interval.max) {
+                 nextIntervals.push(interval);
+                 continue;
+             }
+             
+             // Case 3: Partial overlap - Split
+             // If forbidden bites into the middle?
+             // Left remaining part
+             if (forbiddenMin > interval.min) {
+                 nextIntervals.push({ min: interval.min, max: forbiddenMin });
+             }
+             // Right remaining part
+             if (forbiddenMax < interval.max) {
+                 nextIntervals.push({ min: forbiddenMax, max: interval.max });
+             }
+        }
+        validIntervals = nextIntervals;
+        
+        // Optimization: If no valid intervals left, we can stop early
+        if (validIntervals.length === 0) return false;
+    }
+    
+    // If any interval remains, simulation says "Yes, there is a path!"
+    return validIntervals.length > 0;
+};
+
 const checkValidity = (
   pos: { x: number; y: number; z: number },
   dim: { l: number; w: number; h: number },
@@ -57,6 +173,9 @@ const checkValidity = (
     const intersectZ = pos.z < item.position.z + item.dimensions.width && pos.z + dim.w > item.position.z;
     if (intersectX && intersectY && intersectZ) return false;
   }
+
+  // Check if forklift can technically reach this position without collision
+  if (!checkForkliftAccess(pos, dim, containerDim, placedItems)) return false;
 
   if (pos.y > 0) {
       let totalSupportArea = 0;
@@ -278,5 +397,5 @@ export const calculateShipment = (
       shipmentResults[shipmentResults.length - 1].unplacedItems = Array.from(map.values());
   }
 
-  return shipmentResults;
+  return shipmentResults.filter(r => r.placedItems.length > 0);
 };
