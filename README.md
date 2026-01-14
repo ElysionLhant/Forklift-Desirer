@@ -26,8 +26,12 @@ Forklift Desirer 是一个基于 React + Three.js 的 3D 集装箱装载可视�
 
 ##  智能 AI 集成 (Local AI Native)
 
-本系统彻底重构了 AI 服务层，优先支持本地化运行：
+本系统彻底重构了 AI 服务层，优先支持本地化运行，并引入了更精准的数据交互模式：
 
+*   **双模式智能判定 (Dual-Mode Intelligence)**：系统会自动识别用户意图。如果输入包含货物数据，系统将自动切换至**数据提取模式 (Data Extraction Mode)**，进行严格的 JSON 格式化提取；如果用户进行物流咨询，则切换至**专家顾问模式 (Advisor Mode)**。
+*   **外部 LLM 协作 (External LLM Support)**：
+    *   **复制定义 (Copy Prompt)**：对于没有本地强力模型或无 API 的用户，提供一键复制 "System Prompt" 功能。您可以将此 Prompt 发送给 ChatGPT/Claude 等外部最强模型。
+    *   **手动导入 (Manual Import)**：支持将外部模型生成的 JSON 直接粘贴回系统，立刻生成可视化方案。
 *   **Local AI (Ollama)**：默认支持连接本地 Ollama 服务（自动检测模型，如 `llama3`, `qwen` 等）。无数据上传风险，零 API 成本。
 *   **OpenAI Compatible**：同时支持任何兼容 OpenAI 接口的云端或本地服务（如 LM Studio）。
 *   **功能**：AI 用于自然语言处理，包括解析混乱的装箱单文本、转换尺寸单位、提取货物元数据等。
