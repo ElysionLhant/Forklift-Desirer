@@ -186,7 +186,6 @@ export default function App() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
                       <input type="text" value={aiConfig.modelName} onChange={e => setAiConfig({...aiConfig, modelName: e.target.value})} className="w-full p-2 border rounded-md" placeholder="e.g. gemini-3-flash-preview"/>
                   </div>
-                  {/* Removed API Key input field as per guidelines - API key is strictly sourced from process.env.API_KEY */}
                   <div className="pt-2">
                       <button onClick={() => setShowSettings(false)} className="w-full bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700">Save Configuration</button>
                   </div>
@@ -216,7 +215,13 @@ export default function App() {
 
       <main className="flex-1 max-w-[1600px] w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-3 space-y-6 flex flex-col h-[calc(100vh-100px)] overflow-y-auto pb-10 hide-scrollbar">
-            <CargoForm items={cargoItems} onAdd={(i) => setCargoItems([...cargoItems, i])} onRemove={(id) => setCargoItems(cargoItems.filter(i=>i.id !== id))} onLoadDemo={handleLoadDemo} />
+            <CargoForm 
+                items={cargoItems} 
+                onAdd={(i) => setCargoItems([...cargoItems, i])} 
+                onRemove={(id) => setCargoItems(cargoItems.filter(i=>i.id !== id))} 
+                onClear={() => setCargoItems([])}
+                onLoadDemo={handleLoadDemo} 
+            />
             <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
                 <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center">
                     <Layers className="w-4 h-4 mr-1 text-indigo-600" /> Optimization Plan

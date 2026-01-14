@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { Plus, Trash2, Box, Database, AlertCircle, Layers } from 'lucide-react';
+import { Plus, Trash2, Box, Database, AlertCircle, Layers, RotateCcw } from 'lucide-react';
 import { CargoItem } from '../types';
 import { MOCK_CARGO_COLORS } from '../constants';
 
@@ -7,6 +8,7 @@ interface CargoFormProps {
   items: CargoItem[];
   onAdd: (item: CargoItem) => void;
   onRemove: (id: string) => void;
+  onClear?: () => void;
   onLoadDemo?: () => void;
 }
 
@@ -20,7 +22,7 @@ interface FormState {
     unstackable: boolean;
 }
 
-export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, onLoadDemo }) => {
+export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, onClear, onLoadDemo }) => {
   const [formData, setFormData] = useState<FormState>({
     name: '',
     l: 120,
@@ -88,7 +90,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
     
     onAdd(item);
     
-    // Reset form, keeping logic for easy repetitive entry if needed, or full reset
+    // Reset form
     setFormData({ 
         name: '', 
         l: 120, 
@@ -107,14 +109,25 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
         <h3 className="text-lg font-semibold text-gray-800 flex items-center">
             <Box className="w-5 h-5 mr-2 text-indigo-600" /> Cargo Manifest
         </h3>
-        {onLoadDemo && items.length === 0 && (
-            <button 
-                onClick={onLoadDemo}
-                className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2 py-1 rounded-md flex items-center gap-1 transition-colors"
-            >
-                <Database className="w-3 h-3" /> Demo
-            </button>
-        )}
+        <div className="flex items-center gap-2">
+            {items.length > 0 && onClear && (
+                <button 
+                    onClick={onClear}
+                    title="Clear All"
+                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-all"
+                >
+                    <RotateCcw className="w-4 h-4" />
+                </button>
+            )}
+            {onLoadDemo && items.length === 0 && (
+                <button 
+                    onClick={onLoadDemo}
+                    className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2.5 py-1.5 rounded-md flex items-center gap-1.5 transition-colors font-medium"
+                >
+                    <Database className="w-3.5 h-3.5" /> Demo
+                </button>
+            )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 mb-4">
