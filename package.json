@@ -1,26 +1,49 @@
 {
   "name": "forklift-desirer---container-optimizer",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:3000 && cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
+    "electron:build": "npm run build && node build_electron.cjs"
+  },
+  "build": {
+    "appId": "com.elysion.forkliftdesirer",
+    "productName": "Forklift Desirer",
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "dir"
+    }
   },
   "dependencies": {
-    "react": "^19.2.3",
-    "three": "^0.182.0",
+    "@google/genai": "^1.35.0",
+    "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "@google/genai": "^1.35.0",
-    "@react-three/drei": "^10.7.7"
+    "three": "^0.182.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.4.0",
+    "electron-packager": "^17.1.2",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "wait-on": "^9.0.3"
   }
 }

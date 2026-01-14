@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Ship, BrainCircuit, RotateCcw, Send, ChevronLeft, ChevronRight, Layers, LayoutGrid, Sparkles, Box, Settings, Paperclip, X, Trash2, FastForward, PieChart } from 'lucide-react';
+import { Ship, BrainCircuit, RotateCcw, Send, ChevronLeft, ChevronRight, Layers, LayoutGrid, Sparkles, Box, Settings, Paperclip, X, Trash2, FastForward, PieChart, Copy, FileJson } from 'lucide-react';
 import { CargoForm } from './components/CargoForm';
 import { Container3D } from './components/Container3D';
 import { CONTAINERS, MOCK_CARGO_COLORS } from './constants';
 import { CargoItem, PackingResult, ChatMsg, AIConfig, DEFAULT_AI_CONFIG } from './types';
 import { calculateShipment } from './services/packer';
-import { AIService, extractCargoJSON } from './services/aiService';
+import { AIService, extractCargoJSON, DATA_EXTRACTION_PROMPT, ADVISOR_PROMPT } from './services/aiService';
 
 type StrategyMode = 'SMART_MIX' | 'CUSTOM_PLAN' | 'SINGLE';
 
@@ -124,20 +124,35 @@ export default function App() {
     setIsChatLoading(true);
 
     const service = new AIService(aiConfig);
-    const context = shipmentResults.length > 0 ? {
-        cargoItems,
-        result: shipmentResults[0],
-        containerName: strategyMode === 'SMART_MIX' ? 'Smart Mix' : strategyMode === 'CUSTOM_PLAN' ? 'Custom Plan' : singleStrategyType
-    } : undefined;
+    
+    // Step 1: Check Intent
+    const intent = await service.classifyIntent(userMsg);
+    
+    let responseText = "";
+    if (intent === 'DATA') {
+        // Step 2a: Data Extraction Mode (Internal specific prompt)
+        const jsonResponse = await service.sendMessage([...chatHistory, userMsg], undefined, DATA_EXTRACTION_PROMPT);
+        const extractedData = extractCargoJSON(jsonResponse);
+        
+        if (extractedData && Array.isArray(extractedData) && extractedData.length > 0) {
+            setPendingCargoUpdate(extractedData);
+            responseText = `I have identified ${extractedData.length} cargo items from your input. Please review the import panel above to apply them.`;
+        } else {
+             // Fallback if classification said YES but extraction failed
+             responseText = "I detected cargo information but couldn't extract the data structures clearly. Could you check the format?";
+        }
+    } else {
+        // Step 2b: Advisor Mode
+        const context = shipmentResults.length > 0 ? {
+            cargoItems,
+            result: shipmentResults[0],
+            containerName: strategyMode === 'SMART_MIX' ? 'Smart Mix' : strategyMode === 'CUSTOM_PLAN' ? 'Custom Plan' : singleStrategyType
+        } : undefined;
+        responseText = await service.sendMessage([...chatHistory, userMsg], context, ADVISOR_PROMPT);
+    }
 
-    const responseText = await service.sendMessage([...chatHistory, userMsg], context);
     setIsChatLoading(false);
     setChatHistory(prev => [...prev, { role: 'model', text: responseText }]);
-
-    const extractedData = extractCargoJSON(responseText);
-    if (extractedData && Array.isArray(extractedData)) {
-        setPendingCargoUpdate(extractedData);
-    }
   };
 
   const handleApplyCargoUpdate = () => {
@@ -154,6 +169,43 @@ export default function App() {
       setCargoItems(newItems);
       setPendingCargoUpdate(null);
       setChatHistory(prev => [...prev, { role: 'model', text: "✅ Manifest updated. Calculations refreshed." }]);
+  };
+
+  const handleCopySystemPrompt = () => {
+      navigator.clipboard.writeText(DATA_EXTRACTION_PROMPT);
+      setChatHistory(prev => [...prev, { role: 'model', text: "ℹ️ System prompt copied to clipboard. You can now use it with an external LLM." }]);
+  };
+
+  const handleManualImport = () => {
+      const input = prompt("Paste the JSON output from external LLM here:");
+      if (!input) return;
+
+      let data = extractCargoJSON(input);
+      if (!data) {
+          try {
+              data = JSON.parse(input);
+          } catch (e) {
+              alert("Failed to parse JSON.");
+              return;
+          }
+      }
+
+      if (data && Array.isArray(data)) {
+          const newItems: CargoItem[] = data.map((item: any, idx) => ({
+              id: Math.random().toString(36).substr(2, 9),
+              name: item.name || `Item ${idx+1}`,
+              quantity: Number(item.qty) || 1,
+              weight: Number(item.weight) || 10,
+              dimensions: { length: Number(item.l) || 100, width: Number(item.w) || 100, height: Number(item.h) || 100 },
+              unstackable: !!item.unstackable,
+              color: MOCK_CARGO_COLORS[idx % MOCK_CARGO_COLORS.length]
+          }));
+          setCargoItems(newItems);
+          setPendingCargoUpdate(null);
+          setChatHistory(prev => [...prev, { role: 'model', text: "✅ Manifest updated via manual import." }]);
+      } else {
+          alert("Invalid data format. Expected an array of cargo items.");
+      }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -342,6 +394,14 @@ export default function App() {
                             <h3 className="font-semibold text-sm leading-tight">AI Advisor</h3>
                             <p className="text-[10px] text-indigo-100">{aiConfig.provider}</p>
                         </div>
+                    </div>
+                    <div className="flex gap-1">
+                        <button onClick={handleCopySystemPrompt} title="Copy System Prompt" className="p-1.5 hover:bg-white/20 rounded-md transition-colors">
+                            <Copy className="w-4 h-4" />
+                        </button>
+                        <button onClick={handleManualImport} title="Import JSON Manifest" className="p-1.5 hover:bg-white/20 rounded-md transition-colors">
+                            <FileJson className="w-4 h-4" />
+                        </button>
                     </div>
                 </div>
                 <div className="flex-1 p-3 overflow-y-auto space-y-3 bg-slate-50">

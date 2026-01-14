@@ -1,45 +1,101 @@
 
 import { CargoItem, PackingResult, AIConfig, ChatMsg } from "../types";
 
-const systemPrompt = `
-You are a Senior Logistics Advisor for "Forklift Desirer".
-Your mission: Help users maximize container utilization and calculate minimum container count needed.
+// 1. Data Extraction Prompt (Strict JSON)
+export const DATA_EXTRACTION_PROMPT = `
+You are a Data Extraction Engine. 
+Your ONLY purpose is to extract cargo specifications from the input into a strict JSON format for the "Forklift Desirer" 3D packing engine.
 
-CORE CONSTRAINTS:
-- Functional Height Limit = Container Height - 17cm (2cm buffer + 15cm forklift lift clearance).
-- 20GP/40GP loading limit: ~222cm.
-- 40HQ loading limit: ~252cm.
+OUTPUT RULES:
+- Return ONLY a JSON array.
+- No markdown formatting, no conversational text, no explanations.
+- If no cargo data is found, return an empty array: []
 
-AI CAPABILITIES:
-1. EXTRACT cargo dimensions/qty from input text or images.
-2. RECOMMEND container types (favoring 20GP over 40GP/HQ if it fits).
+DATA FIELDS:
+1. name: string (Item Name)
+2. qty: number (Quantity)
+3. l: number (Length in cm)
+4. w: number (Width in cm)
+5. h: number (Height in cm)
+6. weight: number (Weight in kg)
+7. unstackable: boolean (Identify keywords: "fragile", "do not stack", "top load")
 
-JSON OUTPUT FORMAT:
-\`\`\`json
+UNIT CONVERSION:
+- Convert ALL dimensions to Centimeters (cm).
+- Convert ALL weights to Kilograms (kg).
+
+EXAMPLE OUTPUT:
 [
-  { 
-    "name": "Item Name", 
-    "qty": 10, 
-    "l": 100, 
-    "w": 50, 
-    "h": 50, 
-    "weight": 20,
-    "unstackable": false 
-  }
+  { "name": "Box A", "qty": 10, "l": 50, "w": 30, "h": 20, "weight": 5, "unstackable": false },
+  { "name": "Long Tube", "qty": 2, "l": 200, "w": 10, "h": 10, "weight": 15, "unstackable": true }
 ]
-\`\`\`
-
-IMPORTANT: 
-- Do NOT provide specific price quotes or currency calculations.
-- Focus on space optimization and explaining height constraints based on forklift operations.
-- Always assume 15cm of clearance is needed at the top for fork lifting.
 `;
 
+// 2. Advisor Prompt (Conversational, NO data extraction)
+export const ADVISOR_PROMPT = `
+You are a Senior Logistics Advisor for "Forklift Desirer".
+Your role is to answer questions about packing efficiency, warehouse operations, and logistics best practices.
+
+IMPORTANT:
+- Do NOT try to extract cargo data or generate JSON.
+- Do NOT try to calculate container counts or perform complex 3D packing math (the engine does this).
+- If the user asks for packaging advice, remember:
+  * Our engine enforces a 17cm overhead clearance (15cm forklift + 2cm buffer).
+  * Max loading heights: 20GP/40GP (~221cm), 40HQ (~251cm).
+- Keep answers concise and professional.
+`;
+
+// 3. Intent Classification Prompt
+const CLASSIFICATION_PROMPT = `
+Analyze the following user input (and images if any).
+Does this input contain specific cargo/shipment data (dimensions, weights, quantities) that needs to be extracted for packing?
+Reply EXACTLY with "YES" or "NO". Do not add any punctuation or extra text.
+`;
+
+// Legacy export for backward compatibility if needed, though we should migrate away.
+export const systemPrompt = DATA_EXTRACTION_PROMPT; 
+
 export const extractCargoJSON = (text: string): any[] | null => {
-  const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
-  if (jsonMatch && jsonMatch[1]) {
-    try { return JSON.parse(jsonMatch[1]); } catch (e) { console.error("JSON parse error", e); }
+  let allItems: any[] = [];
+  let found = false;
+
+  // 1. Try finding Code Block JSON (Global search to find ALL blocks)
+  // Regex explanation:
+  // ```json\s* matches start of block, allowing for flexible whitespace/newline
+  // ([\s\S]*?) matches the content non-greedily
+  // \s*``` matches the end of block
+  const codeBlockRegex = /```json\s*([\s\S]*?)\s*```/g;
+  let match;
+  
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+      if (match[1]) {
+          try {
+              const parsed = JSON.parse(match[1]);
+              if (Array.isArray(parsed)) {
+                  allItems = [...allItems, ...parsed];
+                  found = true;
+              } else if (typeof parsed === 'object' && parsed !== null) {
+                  // Single object fallback
+                   allItems.push(parsed);
+                   found = true;
+              }
+          } catch (e) { 
+              console.warn("JSON parse error in block, skipping.", e); 
+          }
+      }
   }
+
+  if (found) return allItems;
+
+  // 2. Fallback: Try parsing raw text if it looks like JSON array and no code blocks were found
+  const trimmed = text.trim();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try { 
+          const parsed = JSON.parse(trimmed); 
+          if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+  }
+
   return null;
 };
 
@@ -59,30 +115,50 @@ export class AIService {
       }
   }
 
-  async sendMessage(history: ChatMsg[], context?: { cargoItems: CargoItem[], result: PackingResult, containerName: string }): Promise<string> {
+  // New method: Determine intent
+  async classifyIntent(msg: ChatMsg): Promise<'DATA' | 'CHAT'> {
+    const response = await this.sendInternal(msg, CLASSIFICATION_PROMPT, 'NO_CONTEXT');
+    const cleanResponse = response.trim().toUpperCase().replace(/[^A-Z]/g, '');
+    return cleanResponse.includes('YES') ? 'DATA' : 'CHAT';
+  }
+
+  // Unified method to send message with specific prompt
+  async sendMessage(history: ChatMsg[], context?: { cargoItems: CargoItem[], result: PackingResult, containerName: string }, overridePrompt?: string): Promise<string> {
     let contextStr = "";
     if (context) {
         const summary = context.cargoItems.map(c => `- ${c.name}: ${c.quantity}x (${c.dimensions.length}x${c.dimensions.width}x${c.dimensions.height})cm`).join('\n');
         contextStr = `Current Container: ${context.containerName}\nUtil: ${context.result.volumeUtilization.toFixed(1)}%\nManifest:\n${summary}`;
     }
+    
     const latestMsg = history[history.length - 1];
     
-    switch (this.config.provider) {
+    // Check intent only if no override prompt is provided
+    if (!overridePrompt) {
+        // This logic is moved to App.tsx usually, but if called directly:
+         return this.sendInternal(latestMsg, ADVISOR_PROMPT, contextStr);
+    } else {
+         return this.sendInternal(latestMsg, overridePrompt, contextStr);
+    }
+  }
+
+  // Internal sender that handles provider details
+  private async sendInternal(msg: ChatMsg, sysPrompt: string, contextStr: string): Promise<string> {
+      switch (this.config.provider) {
         case 'ollama':
-            return this.sendToOllama(latestMsg, contextStr);
+            return this.sendToOllama(msg, sysPrompt, contextStr);
         case 'openai':
         case 'lmstudio':
-            return this.sendToOpenAICompatible(latestMsg, contextStr);
+            return this.sendToOpenAICompatible(msg, sysPrompt, contextStr);
         default:
             return "Provider not implemented.";
     }
   }
 
-  private async sendToOllama(msg: ChatMsg, contextStr: string): Promise<string> {
+  private async sendToOllama(msg: ChatMsg, sysPrompt: string, contextStr: string): Promise<string> {
       const baseUrl = this.config.baseUrl || 'http://localhost:11434';
       const model = this.config.modelName || 'llama3';
       
-      const content = `${contextStr}\n\nUser: ${msg.text}`;
+      const content = contextStr === 'NO_CONTEXT' ? msg.text : `${contextStr}\n\nUser: ${msg.text}`;
       
       const messageObj: any = { role: 'user', content: content };
       
@@ -97,10 +173,11 @@ export class AIService {
       const body = {
           model: model,
           messages: [
-              { role: 'system', content: systemPrompt },
+              { role: 'system', content: sysPrompt },
               messageObj
           ],
-          stream: false
+          stream: false,
+          options: { temperature: sysPrompt === DATA_EXTRACTION_PROMPT ? 0.0 : 0.7 } // Low temp for data
       };
 
       try {
@@ -118,13 +195,13 @@ export class AIService {
       }
   }
 
-  private async sendToOpenAICompatible(msg: ChatMsg, contextStr: string): Promise<string> {
+  private async sendToOpenAICompatible(msg: ChatMsg, sysPrompt: string, contextStr: string): Promise<string> {
       const baseUrl = this.config.baseUrl || (this.config.provider === 'lmstudio' ? 'http://localhost:1234/v1' : 'https://api.openai.com/v1');
       const apiKey = this.config.apiKey || 'not-needed';
       const model = this.config.modelName || 'local-model';
 
       const content = [
-          { type: "text", text: `${contextStr}\n\nUser: ${msg.text}` }
+          { type: "text", text: contextStr === 'NO_CONTEXT' ? msg.text : `${contextStr}\n\nUser: ${msg.text}` }
       ];
 
       if (msg.attachments) {
@@ -139,14 +216,11 @@ export class AIService {
       const body = {
           model: model,
           messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: this.config.provider === 'lmstudio' ? `${contextStr}\n\nUser: ${msg.text}` : content } 
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: this.config.provider === 'lmstudio' ? (contextStr === 'NO_CONTEXT' ? msg.text : `${contextStr}\n\nUser: ${msg.text}`) : content } 
           ],
-          temperature: 0.7
+          temperature: sysPrompt === DATA_EXTRACTION_PROMPT ? 0.0 : 0.7
       };
-
-      // LM Studio and some local inferencing servers might not support the complex content array for 'user', so we fallback to string if attachments are empty or simplified logic is preferred. 
-      // But for now, we try standard structure. Note: LM Studio often prefers simple string content in 'user' role if not using vision specific APIs.
       
       try {
           const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -169,3 +243,4 @@ export class AIService {
       }
   }
 }
+
