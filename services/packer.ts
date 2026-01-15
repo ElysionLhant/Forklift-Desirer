@@ -1,6 +1,7 @@
 
 import { CargoItem, ContainerSpec, PlacedItem, PackingResult } from '../types';
 import { CONTAINERS } from '../constants';
+import { projectDebugger } from './debugger';
 
 const OPERATION_BUFFER = 2; 
 const FORKLIFT_LIFT_MARGIN = 15;
@@ -217,11 +218,11 @@ const checkValidity = (
   return true;
 };
 
-const packSingleContainer = (
+const packSingleContainerAsync = async (
     containerSpec: ContainerSpec, 
     boxes: BoxToPack[],
     containerIndex: number
-): { result: PackingResult, remainingBoxes: BoxToPack[] } => {
+): Promise<{ result: PackingResult, remainingBoxes: BoxToPack[] }> => {
     
     const cDim = {
         l: containerSpec.dimensions.length - OPERATION_BUFFER,
@@ -238,6 +239,24 @@ const packSingleContainer = (
 
     const ADHESION_BONUS = 600; 
 
+    // PRE-CALCULATION / LOOKAHEAD
+    // Analyze the unstackable items to understand what kind of "Headroom" we need to preserve.
+    const unstackableItems = candidatePool.filter(b => b.unstackable);
+    const unstackableHeights = [...new Set(unstackableItems.map(b => b.dim.h))].sort((a,b) => b-a); // Descending
+    const maxUnstackableH = unstackableHeights.length > 0 ? unstackableHeights[0] : 0;
+    const minUnstackableH = unstackableHeights.length > 0 ? unstackableHeights[unstackableHeights.length - 1] : 0;
+    
+    // We want to form layers that leave exactly enough space for these items.
+    // e.g. if Container is 270cm, and Unstackable is 80cm, we want a platform at 190cm.
+    const targetPlatformLevels = unstackableHeights.map(h => cDim.h - h);
+
+    projectDebugger.log('Packer', `Starting container #${containerIndex} (${containerSpec.type})`, {
+        boxCount: candidatePool.length,
+        unstackableCount: unstackableItems.length,
+        unstackableHeights,
+        targetPlatformLevels
+    });
+
     // Helper to optimize position by sliding left (decreasing Z)
     const optimizeZ = (startPos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}) => {
         // Fix for "Staircase" / Offset issue:
@@ -247,7 +266,7 @@ const packSingleContainer = (
         if (startPos.y > 0.1) return startPos.z;
 
         let optimizedZ = startPos.z;
-        const step = 0.5; // High precision for tight stacking
+        const step = 5.0; // Increased from 0.5 to 5.0 to prevent performance freeze and improve alignment
         while (optimizedZ - step >= 0) {
              const testPos = { ...startPos, z: optimizedZ - step };
              if (checkValidity(testPos, dim, cDim, placedItems)) {
@@ -288,7 +307,11 @@ const packSingleContainer = (
     };
 
     // Main Loop: Iterate until no more boxes can be placed
+    let loopCounter = 0;
     while (candidatePool.length > 0) {
+        loopCounter++;
+        if (loopCounter % 5 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
         let bestMove: {
             boxIndex: number;
             anchorIndex: number;
@@ -325,16 +348,50 @@ const packSingleContainer = (
                     const finalPos = { x: anc.x, y: anc.y, z: optZ };
                     
                     // Smart Scoring
-                    let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+                    // BASE SCORE:
+                    // Primary: Minimize X (Fill Back to Front)
+                    // Secondary: Minimize Y (Fill Floor to Ceiling) -> changed logic below
+                    // Tertiary: Minimize Z (Fill Right to Left)
+                    let score = (anc.x * 10000) + (anc.y * 10) + optZ;
                     
-                    // PENALTY: Unstackable on Floor
-                    // We strongly discourage placing unstackable items on the ground if they can go on top of something.
-                    if (anc.y === 0 && box.unstackable) score += 1000000;
-                    
-                    // REMOVED BONUS: Unstackable on Ceiling
-                    // Previously we gave -20000 bonus, which caused unstackables to "jump the queue" and cap stacks prematurely.
-                    // By removing this, we rely on the SORT ORDER (Stackables First).
-                    // This ensures Red boxes stack as high as possible (Red on Red on Red) before an Unstackable is finally placed on top.
+                    // Helper: logic to score unstackables
+                    if (box.unstackable) {
+                         if (anc.y === 0) {
+                             score += 10000000; // HUGE Penalize floor placement to force them to be top-fillers
+                         } else {
+                             // GAP STRATEGY FOR UNSTACKABLES
+                             // We want them to fill the "Trash Gaps" (small gaps at top).
+                             const topGap = cDim.h - (anc.y + box.dim.h);
+                             
+                             // Perfect fit (flush with ceiling) -> Mega Bonus
+                             if (topGap < 5) { 
+                                 score -= 500000; 
+                             } 
+                             // High placement -> Good Bonus (The higher the better)
+                             else {
+                                 // Add bonus proportional to height (higher Y = lower score)
+                                 score -= (anc.y * 100); 
+                             }
+                         }
+                    } else {
+                        // STACKABLE STRATEGY
+                        if (anc.x < cDim.l * 0.5) score -= 5000;
+                        if (anc.x > cDim.l * 0.8 && anc.y > cDim.h * 0.5) score += 50000;
+
+                        const currentTopY = anc.y + box.dim.h;
+                        const gapRemaining = cDim.h - currentTopY;
+
+                        // 1. LOOKAHEAD: Check if we are landing on a "Perfect Platform"
+                        const isGoodPlatform = targetPlatformLevels.some(lvl => Math.abs(lvl - currentTopY) < 5);
+                        if (isGoodPlatform) {
+                            score -= 20000; 
+                        }
+
+                        // 2. LOOKAHEAD: Kill-Zone Penalty
+                        if (minUnstackableH > 0 && gapRemaining < minUnstackableH && gapRemaining > 5) {
+                            score += 100000; 
+                        }
+                    }
 
                     // Adhesion
                     if (hasSameTypeNeighbor(finalPos, box.dim, box.cargoId)) {
@@ -342,12 +399,17 @@ const packSingleContainer = (
                     }
 
                     if (score < bestScore) {
+                        // Debug Log for significant moves
+                        if (box.unstackable || score < -10000) {
+                            projectDebugger.debug('Packer', `New Best (Norm): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + box.dim.h) });
+                        }
+                        
                         bestScore = score;
                         bestMove = {
                             boxIndex: b,
                             anchorIndex: a,
                             isRotated: false,
-                            score: score,
+                             score: score,
                             pos: finalPos
                         };
                     }
@@ -359,15 +421,52 @@ const packSingleContainer = (
                     const optZ = optimizeZ(anc, rotDim);
                     const finalPos = { x: anc.x, y: anc.y, z: optZ };
 
-                    let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
-                    if (anc.y === 0 && box.unstackable) score += 1000000;
-                    // if (anc.y > 0 && box.unstackable) score -= 20000; // Removed to prevent premature capping
+// Smart Scoring (Rotated)
+                    let score = (anc.x * 10000) + (anc.y * 10) + optZ;
                     
+                    if (box.unstackable) {
+                         if (anc.y === 0) {
+                             score += 10000000;
+                         } else {
+                             const topGap = cDim.h - (anc.y + rotDim.h);
+                             if (topGap < 5) { // Perfect fit
+                                 score -= 500000; 
+                             } else {
+                                 score -= (anc.y * 100); 
+                             }
+                         }
+                    } else {
+                        // STACKABLE SCORING
+                        if (anc.x < cDim.l * 0.5) score -= 5000; // Prefer Back
+                        if (anc.x > cDim.l * 0.8 && anc.y > cDim.h * 0.5) score += 50000; // Avoid Door Tower
+
+                        const currentTopY = anc.y + rotDim.h;
+                        const gapRemaining = cDim.h - currentTopY;
+
+                        // 1. LOOKAHEAD: Check if we are landing on a "Perfect Platform" for an unstackable
+                        // If currentTopY matches a target platform level (within tolerance), Bonus!
+                        const isGoodPlatform = targetPlatformLevels.some(lvl => Math.abs(lvl - currentTopY) < 5);
+                        if (isGoodPlatform) {
+                            score -= 20000; // Good job, you prepared a spot for a Red box
+                        }
+
+                        // 2. LOOKAHEAD: Check if we are "Killing" a potential spot
+                        // If we create a gap that is TOO SMALL for the smallest unstackable (but not filled), penalty.
+                        if (minUnstackableH > 0 && gapRemaining < minUnstackableH && gapRemaining > 5) {
+                            score += 100000; // You are creating unusable trash space! Stop!
+                        }
+                    }
+
                     if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
                         score -= ADHESION_BONUS;
                     }
 
                     if (score < bestScore) {
+                         // Debug Log for significant moves
+                        if (box.unstackable || score < -10000) {
+                            projectDebugger.debug('Packer', `New Best (Rot): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + rotDim.h) });
+                        }
+
                         bestScore = score;
                         bestMove = {
                             boxIndex: b,
@@ -438,10 +537,11 @@ const packSingleContainer = (
     };
 };
 
-export const calculateShipment = (
+export const calculateShipmentAsync = async (
   strategy: 'SMART_MIX' | ContainerSpec | ContainerSpec[],
-  cargoItems: CargoItem[]
-): PackingResult[] => {
+  cargoItems: CargoItem[],
+  onProgress?: (message: string, progress: number) => void
+): Promise<PackingResult[]> => {
   
   let boxesToPack: BoxToPack[] = [];
   cargoItems.forEach(item => {
@@ -460,16 +560,23 @@ export const calculateShipment = (
   });
 
   boxesToPack.sort((a, b) => {
-      // Priority 1: Stackable items first (False=0 < True=1)
+      // Priority 1: Unstackable items LAST.
+      // We want to build the "Stackable Matrix" first, creating flat surfaces.
+      // Then we fill the remaining gaps (especially top gaps) with unstackables.
       if (a.unstackable !== b.unstackable) {
           return (a.unstackable ? 1 : 0) - (b.unstackable ? 1 : 0);
       }
-      // Priority 2: Height Descending (Taller items dictate layer height)
-      if (Math.abs(b.dim.h - a.dim.h) > 0.1) {
-          return b.dim.h - a.dim.h;
+      
+      // Priority 2: Base Area Descending (Big footprints first)
+      // This creates larger, more stable platforms for subsequent layers.
+      const areaA = a.dim.l * a.dim.w;
+      const areaB = b.dim.l * b.dim.w;
+      if (Math.abs(areaB - areaA) > 100) {
+          return areaB - areaA;
       }
-      // Priority 3: Base Area Descending (Stable base)
-      return (b.dim.l * b.dim.w) - (a.dim.l * a.dim.w);
+
+      // Priority 3: Height Descending
+      return b.dim.h - a.dim.h;
   });
 
   const shipmentResults: PackingResult[] = [];
@@ -483,14 +590,16 @@ export const calculateShipment = (
       for (const spec of strategy) {
           if (boxesToPack.length === 0) break;
           containerCount++;
-          const { result, remainingBoxes } = packSingleContainer(spec, boxesToPack, containerCount);
+          if (onProgress) onProgress(`Packing container ${containerCount} (${spec.type})...`, 0);
+          const { result, remainingBoxes } = await packSingleContainerAsync(spec, boxesToPack, containerCount);
           shipmentResults.push(result);
           boxesToPack = remainingBoxes;
       }
   } else if (strategy !== 'SMART_MIX') {
       while (boxesToPack.length > 0) {
           containerCount++;
-          const { result, remainingBoxes } = packSingleContainer(strategy, boxesToPack, containerCount);
+          if (onProgress) onProgress(`Packing container ${containerCount}...`, 0);
+          const { result, remainingBoxes } = await packSingleContainerAsync(strategy, boxesToPack, containerCount);
           shipmentResults.push(result);
           boxesToPack = remainingBoxes;
           if (result.placedItems.length === 0) break;
@@ -498,9 +607,10 @@ export const calculateShipment = (
   } else {
       while (boxesToPack.length > 0) {
           containerCount++;
-          
+          if (onProgress) onProgress(`Simulating permutations for Container ${containerCount}...`, 0);
+
           // 1. Try 20GP first if remaining volume is low
-          const test20 = packSingleContainer(spec20GP, boxesToPack, containerCount);
+          const test20 = await packSingleContainerAsync(spec20GP, boxesToPack, containerCount);
           if (test20.remainingBoxes.length === 0) {
               shipmentResults.push(test20.result);
               boxesToPack = [];
@@ -511,35 +621,40 @@ export const calculateShipment = (
           const hasExtraTallCargo = boxesToPack.some(b => b.dim.h > (spec40GP.dimensions.height - OPERATION_BUFFER - FORKLIFT_LIFT_MARGIN));
           
           if (hasExtraTallCargo) {
-              const { result, remainingBoxes } = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+              const { result, remainingBoxes } = await packSingleContainerAsync(spec40HQ, boxesToPack, containerCount);
               shipmentResults.push(result);
               boxesToPack = remainingBoxes;
           } else {
               // 3. Compare 40GP and 40HQ efficiency
-              const simGP = packSingleContainer(spec40GP, boxesToPack, containerCount);
-              const simHQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
+              const simGP = await packSingleContainerAsync(spec40GP, boxesToPack, containerCount);
+              const simHQ = await packSingleContainerAsync(spec40HQ, boxesToPack, containerCount);
 
-              // Calculate Packing Gain (Count based, but could be Volume based)
+              // Calculate Packing Counts
               const countGP = simGP.result.placedItems.length;
               const countHQ = simHQ.result.placedItems.length;
               
-              // Key Fix: Calculate advantage relative to what GP achieved, NOT total boxes in queue.
-              // If GP packs 100 items and HQ packs 110, advantage is 10%.
-              // Previously, if queue was 1000, we calculated 10/1000 = 1%, failing to recognize the gain.
-              const hqEfficiencyGain = countGP > 0 ? (countHQ - countGP) / countGP : 1.0;
+              const hqRemains = simHQ.remainingBoxes.length;
+              const gpRemains = simGP.remainingBoxes.length;
 
-              // Check if HQ completes the entire remainder while GP fails
-              const hqCompletesRemainder = simHQ.remainingBoxes.length === 0 && simGP.remainingBoxes.length > 0;
+              // Decision Logic: Always prefer 40HQ if it packs strictly MORE items.
+              // This ensures we fully utilize the vertical space (top layer) of the HQ whenever possible.
+              const hqPacksMore = countHQ > countGP;
+              const hqCompletes = hqRemains === 0 && gpRemains > 0;
+              const hqVolumeBetter = simHQ.result.usedVolume > simGP.result.usedVolume;
 
-              // Decision Threshold:
-              // 40HQ has ~13% more internal volume than 40GP.
-              // If we gain > 5% more cargo, it's usually worth the small price premium to reduce total container count.
-              if (hqCompletesRemainder || hqEfficiencyGain > 0.05) {
+              // If counts are equal, use HQ only if it completes the manifest (unlikely if counts equal) or has significantly better volume usage (tighter pack?)
+              // Generally if counts are equal, use GP (Cheaper).
+              
+              if (hqCompletes || hqPacksMore) {
                   shipmentResults.push(simHQ.result);
                   boxesToPack = simHQ.remainingBoxes;
+              } else if (countHQ === countGP && hqVolumeBetter && (simHQ.result.usedVolume - simGP.result.usedVolume) > 2.0) {
+                   // Tie-breaker: If same count, but HQ uses 2m^3 more volume (bigger items packed?), take HQ.
+                   shipmentResults.push(simHQ.result);
+                   boxesToPack = simHQ.remainingBoxes;
               } else {
                   shipmentResults.push(simGP.result);
-                  boxesToPack = simGP.remainingBoxes; // Corrected: was using simGP which is correct, but let's be explicit
+                  boxesToPack = simGP.remainingBoxes; 
               }
           }
           

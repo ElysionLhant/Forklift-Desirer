@@ -5,7 +5,7 @@ import { CargoForm } from './components/CargoForm';
 import { Container3D } from './components/Container3D';
 import { CONTAINERS, MOCK_CARGO_COLORS } from './constants';
 import { CargoItem, PackingResult, ChatMsg, AIConfig, DEFAULT_AI_CONFIG, ChatSession } from './types';
-import { calculateShipment } from './services/packer';
+import { calculateShipmentAsync } from './services/packer';
 import { AIService, extractCargoJSON, DATA_EXTRACTION_PROMPT, ADVISOR_PROMPT } from './services/aiService';
 
 type StrategyMode = 'SMART_MIX' | 'CUSTOM_PLAN' | 'SINGLE';
@@ -34,6 +34,8 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [attachments, setAttachments] = useState<{url: string, base64: string, type: 'image'|'file'}[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isPacking, setIsPacking] = useState(false);
+  const [packingProgress, setPackingProgress] = useState('');
   const [pendingCargoUpdate, setPendingCargoUpdate] = useState<any[] | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -82,42 +84,66 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (cargoItems.length === 0) {
-        setStrategySummaries({});
-        setShipmentResults([]);
-        return;
-    }
-
-    const summaries: Record<string, { count: number; desc: string }> = {};
-    const mixRes = calculateShipment('SMART_MIX', cargoItems);
-    const mixCounts = mixRes.reduce((acc, curr) => { acc[curr.containerType] = (acc[curr.containerType] || 0) + 1; return acc; }, {} as Record<string, number>);
-    const mixDesc = Object.entries(mixCounts).map(([t, c]) => `${c}x${t}`).join(', ');
-    summaries['SMART_MIX'] = { count: mixRes.length, desc: mixDesc || "None" };
-
-    CONTAINERS.forEach(c => {
-        const res = calculateShipment(c, cargoItems);
-        summaries[c.type] = { count: res.length, desc: `${res.length}x ${c.type}` };
-    });
-
-    setStrategySummaries(summaries);
-
-    let activeRes: PackingResult[] = [];
-    if (strategyMode === 'SMART_MIX') {
-        activeRes = mixRes;
-    } else if (strategyMode === 'SINGLE') {
-        const spec = CONTAINERS.find(c => c.type === singleStrategyType)!;
-        activeRes = calculateShipment(spec, cargoItems);
-    } else if (strategyMode === 'CUSTOM_PLAN') {
-        if (customPlan.length > 0) {
-            const planSpecs = customPlan.map(type => CONTAINERS.find(c => c.type === type)!);
-            activeRes = calculateShipment(planSpecs, cargoItems);
+    const runPacking = async () => {
+        if (cargoItems.length === 0) {
+            setStrategySummaries({});
+            setShipmentResults([]);
+            return;
         }
-    }
-    
-    setShipmentResults(activeRes);
-    setCurrentContainerIndex(0);
-    if (activeRes.length <= 1) setViewMode('single');
-    handleRestartAnimation();
+
+        setIsPacking(true);
+        setPackingProgress('Initializing...');
+
+        // Wait a tick to let the UI show "Initializing"
+        await new Promise(r => setTimeout(r, 10));
+
+        const summaries: Record<string, { count: number; desc: string }> = {};
+        const resultsCache: Record<string, PackingResult[]> = {};
+
+        // 1. Calculate Smart Mix
+        setPackingProgress('Optimizing Mix Strategy...');
+        const mixRes = await calculateShipmentAsync('SMART_MIX', cargoItems, (msg) => setPackingProgress(`[Smart Mix] ${msg}`));
+        resultsCache['SMART_MIX'] = mixRes;
+
+        const mixCounts = mixRes.reduce((acc, curr) => { acc[curr.containerType] = (acc[curr.containerType] || 0) + 1; return acc; }, {} as Record<string, number>);
+        const mixDesc = Object.entries(mixCounts).map(([t, c]) => `${c}x${t}`).join(', ');
+        summaries['SMART_MIX'] = { count: mixRes.length, desc: mixDesc || "None" };
+
+        // 2. Calculate Individual Container Options
+        for (const c of CONTAINERS) {
+            setPackingProgress(`Analyzing ${c.type} Option...`);
+            // We use a small delay to ensure UI updates between heavy tasks
+            await new Promise(r => setTimeout(r, 0)); 
+            const res = await calculateShipmentAsync(c, cargoItems, (msg) => setPackingProgress(`[${c.type}] ${msg}`));
+            resultsCache[c.type] = res;
+            summaries[c.type] = { count: res.length, desc: `${res.length}x ${c.type}` };
+        }
+
+        setStrategySummaries(summaries);
+
+        // 3. Determine Active Results based on Mode
+        let activeRes: PackingResult[] = [];
+        if (strategyMode === 'SMART_MIX') {
+            activeRes = resultsCache['SMART_MIX'];
+        } else if (strategyMode === 'SINGLE') {
+            activeRes = resultsCache[singleStrategyType] || [];
+        } else if (strategyMode === 'CUSTOM_PLAN') {
+            if (customPlan.length > 0) {
+                setPackingProgress('Applying Custom Plan...');
+                const planSpecs = customPlan.map(type => CONTAINERS.find(c => c.type === type)!);
+                activeRes = await calculateShipmentAsync(planSpecs, cargoItems, (msg) => setPackingProgress(`[Plan] ${msg}`));
+            }
+        }
+        
+        setShipmentResults(activeRes);
+        setCurrentContainerIndex(0);
+        if (activeRes.length <= 1) setViewMode('single');
+        handleRestartAnimation();
+        
+        setIsPacking(false);
+    };
+
+    runPacking();
   }, [cargoItems, strategyMode, singleStrategyType, customPlan]);
 
   const handleRestartAnimation = () => {
@@ -555,6 +581,28 @@ export default function App() {
                               </button>
                           ))
                       )}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Packing Progress Modal */}
+      {isPacking && (
+          <div className="fixed inset-0 bg-black/70 z-[120] flex items-center justify-center p-4 backdrop-blur-sm cursor-wait">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-6 animate-in fade-in zoom-in duration-300 text-center">
+                  <div className="flex justify-center">
+                      <div className="relative w-16 h-16">
+                           <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
+                           <div className="absolute inset-0 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
+                           <Box className="absolute inset-0 m-auto text-indigo-600 w-6 h-6 animate-pulse" />
+                      </div>
+                  </div>
+                  <div>
+                      <h2 className="text-xl font-bold text-gray-800 mb-2">Packing Shipment</h2>
+                      <p className="text-sm text-gray-500 font-medium animate-pulse">{packingProgress}</p>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full bg-indigo-600 animate-pulse w-full"></div>
                   </div>
               </div>
           </div>
