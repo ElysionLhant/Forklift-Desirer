@@ -279,6 +279,7 @@ const packSingleContainerAsync = async (
     // 600 = 6 meters preference (Too high, causes gaps to be ignored).
     // Reduced to 50 (50cm) to allow filling significant gaps with different items.
     const ADHESION_BONUS = 50;  
+    const FLUSH_BONUS = 200; // Bonus for aligning height with neighbors ("Shoulder to Shoulder")
 
     // PRE-CALCULATION / LOOKAHEAD
     // Analyze the unstackable items to understand what kind of "Headroom" we need to preserve.
@@ -343,6 +344,34 @@ const packSingleContainerAsync = async (
                 bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
                 return true;
             }
+        }
+        return false;
+    };
+
+    const isFlushWithNeighbors = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}) => {
+        const myTop = pos.y + dim.h;
+        const PROXIMITY = 1.0;
+        
+        for (const item of placedItems) {
+            const itemTop = item.position.y + item.dimensions.height;
+            if (Math.abs(itemTop - myTop) > 0.5) continue; // Not flush vertically
+            
+            const itemMinX = item.position.x;
+            const itemMaxX = item.position.x + item.dimensions.length;
+            const itemMinZ = item.position.z;
+            const itemMaxZ = item.position.z + item.dimensions.width;
+
+            // Check horizontal overlap to confirm they are "side-by-side"
+            const xOverlap = Math.max(0, Math.min(pos.x + dim.l, itemMaxX) - Math.max(pos.x, itemMinX));
+            const zOverlap = Math.max(0, Math.min(pos.z + dim.w, itemMaxZ) - Math.max(pos.z, itemMinZ));
+            
+            // Neighbors along X axis: Share Z range AND X-distance < PROXIMITY
+            const neighborX = (zOverlap > 0.1) && (Math.abs(pos.x - itemMaxX) < PROXIMITY || Math.abs(itemMinX - (pos.x + dim.l)) < PROXIMITY);
+
+            // Neighbors along Z axis: Share X range AND Z-distance < PROXIMITY
+            const neighborZ = (xOverlap > 0.1) && (Math.abs(pos.z - itemMaxZ) < PROXIMITY || Math.abs(itemMinZ - (pos.z + dim.w)) < PROXIMITY);
+
+            if (neighborX || neighborZ) return true;
         }
         return false;
     };
@@ -467,6 +496,11 @@ const packSingleContainerAsync = async (
                         score -= ADHESION_BONUS;
                     }
 
+                    // Flush Bonus (Shoulder-to-Shoulder)
+                    if (isFlushWithNeighbors(finalPos, box.dim)) {
+                        score -= FLUSH_BONUS; 
+                    }
+
                     if (score < bestScore) {
                         // Debug Log for significant moves
                         if (box.unstackable || score < -10000) {
@@ -546,6 +580,11 @@ const packSingleContainerAsync = async (
 
                     if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
                         score -= ADHESION_BONUS;
+                    }
+
+                    // Flush Bonus (Shoulder-to-Shoulder)
+                    if (isFlushWithNeighbors(finalPos, rotDim)) {
+                        score -= FLUSH_BONUS;
                     }
 
                     if (score < bestScore) {
