@@ -268,6 +268,22 @@ const packSingleContainerAsync = async (
     };
 
     const placedItems: PlacedItem[] = [];
+
+    // --- SPATIAL OPTIMIZATION ---
+    // Bin items by X-coordinate blocks (Length).
+    // This dramatically speeds up adhesion/flush checks by avoiding full O(N) scans.
+    const GRID_SIZE = 50; // cm block size
+    const xGridItems: PlacedItem[][] = [];
+
+    const addItemToGrid = (item: PlacedItem) => {
+        const minBin = Math.floor(item.position.x / GRID_SIZE);
+        const maxBin = Math.floor((item.position.x + item.dimensions.length) / GRID_SIZE);
+        for (let i = minBin; i <= maxBin; i++) {
+            if (!xGridItems[i]) xGridItems[i] = [];
+            xGridItems[i].push(item);
+        }
+    };
+    // -----------------------------
     let anchors: Anchor[] = [{ x: 0, y: 0, z: 0 }];
     
     // Change to Best-Fit: Maintain a candidate pool
@@ -332,28 +348,41 @@ const packSingleContainerAsync = async (
             minY: pos.y - PROXIMITY, maxY: pos.y + dim.h + PROXIMITY,
             minZ: pos.z - PROXIMITY, maxZ: pos.z + dim.w + PROXIMITY
         };
-        
-        for (const item of placedItems) {
-            // Optimization: Y-check first (Vertical separation is most common)
-            if (item.position.y > bounds.maxY || (item.position.y + item.dimensions.height) < bounds.minY) continue;
 
-            // 1. Ground Logic: Keep zones clean.
-            if (pos.y < 0.1) {
-                if (item.cargoId !== cId) continue;
-            }
-            // 2. Air Logic: Anything goes (Implicit allow).
+        const minBin = Math.max(0, Math.floor((pos.x - PROXIMITY) / GRID_SIZE));
+        const maxBin = Math.floor((pos.x + dim.l + PROXIMITY) / GRID_SIZE);
+        const checkedIds = new Set<string>();
 
-            const itemMinX = item.position.x;
-            const itemMaxX = item.position.x + item.dimensions.length;
-            const itemMinY = item.position.y;
-            const itemMaxY = item.position.y + item.dimensions.height;
-            const itemMinZ = item.position.z;
-            const itemMaxZ = item.position.z + item.dimensions.width;
+        // Optimized Loop using Spatial Grid
+        for (let b = minBin; b <= maxBin; b++) {
+            const bin = xGridItems[b];
+            if (!bin) continue;
 
-            if (bounds.minX < itemMaxX && bounds.maxX > itemMinX &&
-                bounds.minY < itemMaxY && bounds.maxY > itemMinY &&
-                bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
-                return true;
+            for (const item of bin) {
+                if (checkedIds.has(item.id)) continue;
+                checkedIds.add(item.id);
+
+                // Optimization: Y-check first (Vertical separation is most common)
+                if (item.position.y > bounds.maxY || (item.position.y + item.dimensions.height) < bounds.minY) continue;
+
+                // 1. Ground Logic: Keep zones clean.
+                if (pos.y < 0.1) {
+                    if (item.cargoId !== cId) continue;
+                }
+                
+                // 2. Air Logic: Anything goes (Implicit allow).
+                const itemMinX = item.position.x;
+                const itemMaxX = item.position.x + item.dimensions.length;
+                const itemMinY = item.position.y;
+                const itemMaxY = item.position.y + item.dimensions.height;
+                const itemMinZ = item.position.z;
+                const itemMaxZ = item.position.z + item.dimensions.width;
+
+                if (bounds.minX < itemMaxX && bounds.maxX > itemMinX &&
+                    bounds.minY < itemMaxY && bounds.maxY > itemMinY &&
+                    bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
+                    return true;
+                }
             }
         }
         return false;
@@ -363,26 +392,38 @@ const packSingleContainerAsync = async (
         const myTop = pos.y + dim.h;
         const PROXIMITY = 1.0;
         
-        for (const item of placedItems) {
-            const itemTop = item.position.y + item.dimensions.height;
-            if (Math.abs(itemTop - myTop) > 0.5) continue; // Not flush vertically
+        const minBin = Math.max(0, Math.floor((pos.x - PROXIMITY) / GRID_SIZE));
+        const maxBin = Math.floor((pos.x + dim.l + PROXIMITY) / GRID_SIZE);
+        const checkedIds = new Set<string>();
+
+        for (let b = minBin; b <= maxBin; b++) {
+            const bin = xGridItems[b];
+            if (!bin) continue;
             
-            const itemMinX = item.position.x;
-            const itemMaxX = item.position.x + item.dimensions.length;
-            const itemMinZ = item.position.z;
-            const itemMaxZ = item.position.z + item.dimensions.width;
+            for (const item of bin) {
+                if (checkedIds.has(item.id)) continue;
+                checkedIds.add(item.id);
 
-            // Check horizontal overlap to confirm they are "side-by-side"
-            const xOverlap = Math.max(0, Math.min(pos.x + dim.l, itemMaxX) - Math.max(pos.x, itemMinX));
-            const zOverlap = Math.max(0, Math.min(pos.z + dim.w, itemMaxZ) - Math.max(pos.z, itemMinZ));
-            
-            // Neighbors along X axis: Share Z range AND X-distance < PROXIMITY
-            const neighborX = (zOverlap > 0.1) && (Math.abs(pos.x - itemMaxX) < PROXIMITY || Math.abs(itemMinX - (pos.x + dim.l)) < PROXIMITY);
+                const itemTop = item.position.y + item.dimensions.height;
+                if (Math.abs(itemTop - myTop) > 0.5) continue; // Not flush vertically
+                
+                const itemMinX = item.position.x;
+                const itemMaxX = item.position.x + item.dimensions.length;
+                const itemMinZ = item.position.z;
+                const itemMaxZ = item.position.z + item.dimensions.width;
 
-            // Neighbors along Z axis: Share X range AND Z-distance < PROXIMITY
-            const neighborZ = (xOverlap > 0.1) && (Math.abs(pos.z - itemMaxZ) < PROXIMITY || Math.abs(itemMinZ - (pos.z + dim.w)) < PROXIMITY);
+                // Check horizontal overlap to confirm they are "side-by-side"
+                const xOverlap = Math.max(0, Math.min(pos.x + dim.l, itemMaxX) - Math.max(pos.x, itemMinX));
+                const zOverlap = Math.max(0, Math.min(pos.z + dim.w, itemMaxZ) - Math.max(pos.z, itemMinZ));
+                
+                // Neighbors along X axis: Share Z range AND X-distance < PROXIMITY
+                const neighborX = (zOverlap > 0.1) && (Math.abs(pos.x - itemMaxX) < PROXIMITY || Math.abs(itemMinX - (pos.x + dim.l)) < PROXIMITY);
 
-            if (neighborX || neighborZ) return true;
+                // Neighbors along Z axis: Share X range AND Z-distance < PROXIMITY
+                const neighborZ = (xOverlap > 0.1) && (Math.abs(pos.z - itemMaxZ) < PROXIMITY || Math.abs(itemMinZ - (pos.z + dim.w)) < PROXIMITY);
+
+                if (neighborX || neighborZ) return true;
+            }
         }
         return false;
     };
@@ -638,6 +679,9 @@ const packSingleContainerAsync = async (
                 containerIndex: containerIndex,
                 unstackable: box.unstackable
             });
+            // Update Grid
+            addItemToGrid(placedItems[placedItems.length - 1]);
+            
             currentWeight += box.wt;
 
             // Remove box from pool
