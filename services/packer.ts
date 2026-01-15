@@ -16,6 +16,14 @@ const FORKLIFT_MAST_HEIGHT = 160;   // The vertical part that might hit things
 const FORKLIFT_CHASSIS_HEIGHT = 140; // The body
 const WALL_BUFFER = 2; // Minimal buffer for walls (simulating skilled operation)
 
+// Z-Banding constants for scoring
+const Z_ZONE_SIZE = 150; // 1.5m deep zones for terracing
+const SUPPORT_THRESHOLD = 0.85; // Require 85% support for stability
+
+// Sorting Heuristics
+const MIN_AREA_DIFF_FOR_SORT = 50; // cm2 difference to consider one item "Larger" than another
+const MIN_QTY_DIFF_FOR_SORT = 10;  // Quantity difference to prioritize bulk items
+
 interface BoxToPack {
   id: string;
   cargoId: string;
@@ -40,6 +48,35 @@ const calculateSupportArea = (
   const xOverlap = Math.max(0, Math.min(baseX + baseL, supportX + supportL) - Math.max(baseX, supportX));
   const zOverlap = Math.max(0, Math.min(baseZ + baseW, supportZ + supportW) - Math.max(baseZ, supportZ));
   return xOverlap * zOverlap;
+};
+
+// Returns the total area of items directly supporting appropriate surface
+const CheckSupportBelow = (
+    boxX: number, boxY: number, boxZ: number, 
+    boxL: number, boxW: number, 
+    placedItems: PlacedItem[]
+): { supportedArea: number, maxSupportBaseArea: number } => {
+    if (boxY === 0) return { supportedArea: boxL * boxW, maxSupportBaseArea: 999999 };
+
+    let supportedArea = 0;
+    let maxBaseArea = 0;
+
+    placedItems.forEach(item => {
+        // Check if item is directly below (allowing small tolerance)
+        const itemTop = item.position.y + item.dimensions.height;
+        if (Math.abs(itemTop - boxY) < 1.0) {
+            const overlap = calculateSupportArea(
+                boxX, boxZ, boxL, boxW,
+                item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
+            );
+            if (overlap > 0) {
+                supportedArea += overlap;
+                const itemBaseArea = item.dimensions.length * item.dimensions.width;
+                if (itemBaseArea > maxBaseArea) maxBaseArea = itemBaseArea;
+            }
+        }
+    });
+    return { supportedArea, maxSupportBaseArea: maxBaseArea };
 };
 
 const canFitThroughDoor = (box: BoxToPack, door: { width: number, height: number }): boolean => {
@@ -374,21 +411,40 @@ const packSingleContainerAsync = async (
                          }
                     } else {
                         // STACKABLE STRATEGY
-                        // Soft penalty for stacking Orange Connectors (Connector Female) to prefer spreading them
-                        if (box.name.includes('Connector Female') && anc.y > 0) {
-                            score += 50000;
-                        }
+                        // Removed hardcoded name checks. 
+                        // We rely on "Big-First" sorting and "Support-Check" to ensure Heavy/Large items 
+                        // settle to the bottom and stable positions naturally.
 
                         if (anc.x < cDim.l * 0.5) score -= 5000;
 
                         // PROGRESSIVE STACKING PENALTY (Slope Effect)
-                        // As we move towards the door (increasing X), placing items high up becomes increasingly expensive.
-                        // This forces high stacks to be deep inside the container (low X).
-                        // Factor 2.0: At X=1200, Y=250 -> Penalty ~600,000. 
-                        score += (anc.x * anc.y * 2.0);
+                        // Use Z-Banding (Terracing) to allow flat tops while still favoring low-front.
+                        const zZone = Math.floor(anc.z / Z_ZONE_SIZE);
+                        score += (zZone * anc.y * 50.0); // Stepwise penalty
 
                         const currentTopY = anc.y + box.dim.h;
                         const gapRemaining = cDim.h - currentTopY;
+
+                        // 3. PHYSICAL STABILITY CHECK
+                        // Ensure we are not placing a big item on a small item
+                        if (anc.y > 0) {
+                            const { supportedArea, maxSupportBaseArea } = CheckSupportBelow(
+                                finalPos.x, finalPos.y, finalPos.z, 
+                                box.dim.l, box.dim.w, 
+                                placedItems
+                            );
+                            
+                            const myArea = box.dim.l * box.dim.w;
+                            // Penalize if we overhang significantly (support < 85%)
+                            if (supportedArea < myArea * SUPPORT_THRESHOLD) {
+                                score += 500000; 
+                            }
+                            // Penalize STRONGLY if we are sitting on something vastly smaller (Unstable base)
+                            // e.g. Big Orange (area 4000) on Small Red (area 2700)
+                            if (maxSupportBaseArea < myArea * 0.9) {
+                                score += 200000; // Force it to find a better base (like floor)
+                            }
+                        }
 
                         // 1. LOOKAHEAD: Check if we are landing on a "Perfect Platform"
                         const isGoodPlatform = targetPlatformLevels.some(lvl => Math.abs(lvl - currentTopY) < 5);
@@ -442,18 +498,33 @@ const packSingleContainerAsync = async (
                          }
                     } else {
                         // STACKABLE SCORING
-                        // Soft penalty for stacking Orange Connectors (Connector Female) to prefer spreading them
-                        if (box.name.includes('Connector Female') && anc.y > 0) {
-                            score += 50000;
-                        }
+                        // Removed hardcoded name checks.
 
                         if (anc.x < cDim.l * 0.5) score -= 5000; // Prefer Back
                         
                         // PROGRESSIVE STACKING PENALTY (Slope Effect) - Rotated
-                        score += (anc.x * anc.y * 2.0);
+                        const zZone = Math.floor(finalPos.z / Z_ZONE_SIZE);
+                        score += (zZone * anc.y * 50.0);
 
                         const currentTopY = anc.y + rotDim.h;
                         const gapRemaining = cDim.h - currentTopY;
+
+                        // 3. PHYSICAL STABILITY CHECK (Rotated)
+                        if (anc.y > 0) {
+                            const { supportedArea, maxSupportBaseArea } = CheckSupportBelow(
+                                finalPos.x, finalPos.y, finalPos.z, 
+                                rotDim.l, rotDim.w, 
+                                placedItems
+                            );
+                            
+                            const myArea = rotDim.l * rotDim.w;
+                            if (supportedArea < myArea * SUPPORT_THRESHOLD) {
+                                score += 500000;
+                            }
+                            if (maxSupportBaseArea < myArea * 0.9) {
+                                score += 200000;
+                            }
+                        }
 
                         // 1. LOOKAHEAD: Check if we are landing on a "Perfect Platform" for an unstackable
                         // If currentTopY matches a target platform level (within tolerance), Bonus!
@@ -572,17 +643,29 @@ export const calculateShipmentAsync = async (
   });
 
   boxesToPack.sort((a, b) => {
-      // Priority 1: Base Area Descending (Big Footprints First to allow stacking small on big)
-      const areaA = a.dim.w * a.dim.l;
-      const areaB = b.dim.w * b.dim.l;
-      if (Math.abs(areaA - areaB) > 100) {
-          return areaB - areaA;
+      // 1. Sort by Stackability: Stackables First
+      //    We need to build the "Base" first, then place "Caps" (Unstackables) on top.
+      if (a.unstackable !== b.unstackable) {
+          return a.unstackable ? 1 : -1;
       }
 
-      // Priority 2: Height Descending (build stable layers)
-      // We want to pack tallest items first to establish the layer height.
-      // Small items can fill gaps later.
-      return b.dim.h - a.dim.h;
+      // 2. Sort by Base Area Descending (Big footprint items go to the BACK/DEEP)
+      //    "Big as base" -> Use large items to form stable layers.
+      const areaA = a.dim.w * a.dim.l;
+      const areaB = b.dim.w * b.dim.l;
+      if (Math.abs(areaA - areaB) > MIN_AREA_DIFF_FOR_SORT) {
+          return areaB - areaA; // DESCENDING
+      }
+
+      // 3. Sort by Quantity Descending
+      //    (Within same footprint, pack the Bulk items before Small lots)
+      if (Math.abs(b.originalItem.quantity - a.originalItem.quantity) > MIN_QTY_DIFF_FOR_SORT) {
+          return b.originalItem.quantity - a.originalItem.quantity;
+      }
+
+      // 4. Sort by Weight Descending
+      //    (Within same footprint/qty, put Heavy on Bottom)
+      return b.wt - a.wt;
   });
 
   const shipmentResults: PackingResult[] = [];

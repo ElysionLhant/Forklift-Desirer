@@ -77,9 +77,13 @@ export default function App() {
 
   const handleLoadDemo = () => {
     setCargoItems([
-      { id: '1', name: 'Std. Machinery Pallet', dimensions: { length: 120, width: 100, height: 210 }, weight: 800, quantity: 24, color: '#3b82f6' },
-      { id: '2', name: 'Electronic Components', dimensions: { length: 80, width: 60, height: 80 }, weight: 150, quantity: 40, color: '#ef4444' },
-      { id: '3', name: 'Tall Crate', dimensions: { length: 100, width: 100, height: 220 }, weight: 300, quantity: 5, color: '#eab308' }
+      { id: '1', name: 'Connector Male', dimensions: { length: 59, width: 39, height: 36 }, weight: 16.5, quantity: 334, color: '#2563eb', groupPriority: 1 },
+      { id: '2', name: 'Cable Tie', dimensions: { length: 57, width: 36, height: 30 }, weight: 15.5, quantity: 168, color: '#f59e0b', groupPriority: 1 },
+      { id: '3', name: 'Connector Female', dimensions: { length: 59, width: 39, height: 36 }, weight: 16.5, quantity: 334, color: '#db2777', groupPriority: 2 },
+      { id: '4', name: 'Terminal Male', dimensions: { length: 33, width: 32, height: 27 }, weight: 13, quantity: 50, color: '#dc2626', groupPriority: 3 },
+      { id: '5', name: 'Solar Panel Connector Cap', dimensions: { length: 46, width: 35, height: 31 }, weight: 8.6, quantity: 400, color: '#16a34a', groupPriority: 4 },
+      { id: '6', name: 'Copper profile', dimensions: { length: 203, width: 11, height: 5 }, weight: 9.87, quantity: 600, color: '#ca8a04', groupPriority: 5 },
+      { id: '7', name: 'Terminal Female', dimensions: { length: 42, width: 27.5, height: 19 }, weight: 6.7, quantity: 700, color: '#9333ea', groupPriority: 6 },
     ]);
   };
 

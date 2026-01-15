@@ -14,6 +14,8 @@ export interface CargoItem {
   color: string;
   quantity: number;
   unstackable?: boolean;
+  /** Lower number = Packed First (Deepest in container) */
+  groupPriority?: number;
 }
 
 export interface ContainerSpec {
