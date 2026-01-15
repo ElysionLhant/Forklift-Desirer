@@ -320,8 +320,12 @@ const packSingleContainerAsync = async (
         return optimizedZ;
     };
 
-    const hasSameTypeNeighbor = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}, cId: string) => {
-        // Check for proximity (within 1cm) to any placed item with same Cargo ID
+    const hasAdhesionNeighbor = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}, cId: string) => {
+        // Check for proximity (within 1cm)
+        // LOGIC UPDATE:
+        // Ground (y=0): Strict clustering (Only stick to same type).
+        // Air (y>0): Any neighbor is good (Stability/Density over Purity).
+        
         const PROXIMITY = 1.0;
         const bounds = {
             minX: pos.x - PROXIMITY, maxX: pos.x + dim.l + PROXIMITY,
@@ -330,8 +334,12 @@ const packSingleContainerAsync = async (
         };
         
         for (const item of placedItems) {
-            if (item.cargoId !== cId) continue;
-            
+            // 1. Ground Logic: Keep zones clean.
+            if (pos.y < 0.1) {
+                if (item.cargoId !== cId) continue;
+            }
+            // 2. Air Logic: Anything goes (Implicit allow).
+
             const itemMinX = item.position.x;
             const itemMaxX = item.position.x + item.dimensions.length;
             const itemMinY = item.position.y;
@@ -492,7 +500,7 @@ const packSingleContainerAsync = async (
                     }
 
                     // Adhesion
-                    if (hasSameTypeNeighbor(finalPos, box.dim, box.cargoId)) {
+                    if (hasAdhesionNeighbor(finalPos, box.dim, box.cargoId)) {
                         score -= ADHESION_BONUS;
                     }
 
@@ -578,7 +586,7 @@ const packSingleContainerAsync = async (
                         }
                     }
 
-                    if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
+                    if (hasAdhesionNeighbor(finalPos, rotDim, box.cargoId)) {
                         score -= ADHESION_BONUS;
                     }
 
