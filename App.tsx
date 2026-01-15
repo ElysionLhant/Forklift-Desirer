@@ -101,50 +101,55 @@ export default function App() {
         // Wait a tick to let the UI show "Initializing"
         await new Promise(r => setTimeout(r, 10));
 
-        const summaries: Record<string, { count: number; desc: string }> = {};
-        const resultsCache: Record<string, PackingResult[]> = {};
+        try {
+            const summaries: Record<string, { count: number; desc: string }> = {};
+            const resultsCache: Record<string, PackingResult[]> = {};
 
-        // 1. Calculate Smart Mix
-        setPackingProgress('Optimizing Mix Strategy...');
-        const mixRes = await calculateShipmentAsync('SMART_MIX', cargoItems, (msg) => setPackingProgress(`[Smart Mix] ${msg}`));
-        resultsCache['SMART_MIX'] = mixRes;
+            // 1. Calculate Smart Mix
+            setPackingProgress('Optimizing Mix Strategy...');
+            const mixRes = await calculateShipmentAsync('SMART_MIX', cargoItems, (msg) => setPackingProgress(`[Smart Mix] ${msg}`));
+            resultsCache['SMART_MIX'] = mixRes;
 
-        const mixCounts = mixRes.reduce((acc, curr) => { acc[curr.containerType] = (acc[curr.containerType] || 0) + 1; return acc; }, {} as Record<string, number>);
-        const mixDesc = Object.entries(mixCounts).map(([t, c]) => `${c}x${t}`).join(', ');
-        summaries['SMART_MIX'] = { count: mixRes.length, desc: mixDesc || "None" };
+            const mixCounts = mixRes.reduce((acc, curr) => { acc[curr.containerType] = (acc[curr.containerType] || 0) + 1; return acc; }, {} as Record<string, number>);
+            const mixDesc = Object.entries(mixCounts).map(([t, c]) => `${c}x${t}`).join(', ');
+            summaries['SMART_MIX'] = { count: mixRes.length, desc: mixDesc || "None" };
 
-        // 2. Calculate Individual Container Options
-        for (const c of CONTAINERS) {
-            setPackingProgress(`Analyzing ${c.type} Option...`);
-            // We use a small delay to ensure UI updates between heavy tasks
-            await new Promise(r => setTimeout(r, 0)); 
-            const res = await calculateShipmentAsync(c, cargoItems, (msg) => setPackingProgress(`[${c.type}] ${msg}`));
-            resultsCache[c.type] = res;
-            summaries[c.type] = { count: res.length, desc: `${res.length}x ${c.type}` };
-        }
-
-        setStrategySummaries(summaries);
-
-        // 3. Determine Active Results based on Mode
-        let activeRes: PackingResult[] = [];
-        if (strategyMode === 'SMART_MIX') {
-            activeRes = resultsCache['SMART_MIX'];
-        } else if (strategyMode === 'SINGLE') {
-            activeRes = resultsCache[singleStrategyType] || [];
-        } else if (strategyMode === 'CUSTOM_PLAN') {
-            if (customPlan.length > 0) {
-                setPackingProgress('Applying Custom Plan...');
-                const planSpecs = customPlan.map(type => CONTAINERS.find(c => c.type === type)!);
-                activeRes = await calculateShipmentAsync(planSpecs, cargoItems, (msg) => setPackingProgress(`[Plan] ${msg}`));
+            // 2. Calculate Individual Container Options
+            for (const c of CONTAINERS) {
+                setPackingProgress(`Analyzing ${c.type} Option...`);
+                // We use a small delay to ensure UI updates between heavy tasks
+                await new Promise(r => setTimeout(r, 0)); 
+                const res = await calculateShipmentAsync(c, cargoItems, (msg) => setPackingProgress(`[${c.type}] ${msg}`));
+                resultsCache[c.type] = res;
+                summaries[c.type] = { count: res.length, desc: `${res.length}x ${c.type}` };
             }
+
+            setStrategySummaries(summaries);
+
+            // 3. Determine Active Results based on Mode
+            let activeRes: PackingResult[] = [];
+            if (strategyMode === 'SMART_MIX') {
+                activeRes = resultsCache['SMART_MIX'];
+            } else if (strategyMode === 'SINGLE') {
+                activeRes = resultsCache[singleStrategyType] || [];
+            } else if (strategyMode === 'CUSTOM_PLAN') {
+                if (customPlan.length > 0) {
+                    setPackingProgress('Applying Custom Plan...');
+                    const planSpecs = customPlan.map(type => CONTAINERS.find(c => c.type === type)!);
+                    activeRes = await calculateShipmentAsync(planSpecs, cargoItems, (msg) => setPackingProgress(`[Plan] ${msg}`));
+                }
+            }
+            
+            setShipmentResults(activeRes);
+            setCurrentContainerIndex(0);
+            if (activeRes.length <= 1) setViewMode('single');
+            handleRestartAnimation();
+        } catch (error) {
+            console.error("Packing failed:", error);
+            setPackingProgress('Error: ' + (error instanceof Error ? error.message : String(error)));
+        } finally {
+            setIsPacking(false);
         }
-        
-        setShipmentResults(activeRes);
-        setCurrentContainerIndex(0);
-        if (activeRes.length <= 1) setViewMode('single');
-        handleRestartAnimation();
-        
-        setIsPacking(false);
     };
 
     runPacking();

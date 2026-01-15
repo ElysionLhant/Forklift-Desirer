@@ -334,6 +334,9 @@ const packSingleContainerAsync = async (
         };
         
         for (const item of placedItems) {
+            // Optimization: Y-check first (Vertical separation is most common)
+            if (item.position.y > bounds.maxY || (item.position.y + item.dimensions.height) < bounds.minY) continue;
+
             // 1. Ground Logic: Keep zones clean.
             if (pos.y < 0.1) {
                 if (item.cargoId !== cId) continue;
@@ -511,9 +514,9 @@ const packSingleContainerAsync = async (
 
                     if (score < bestScore) {
                         // Debug Log for significant moves
-                        if (box.unstackable || score < -10000) {
-                            projectDebugger.debug('Packer', `New Best (Norm): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + box.dim.h) });
-                        }
+                        // if (box.unstackable || score < -10000) {
+                        //    projectDebugger.debug('Packer', `New Best (Norm): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + box.dim.h) });
+                        // }
                         
                         bestScore = score;
                         bestMove = {
@@ -597,9 +600,9 @@ const packSingleContainerAsync = async (
 
                     if (score < bestScore) {
                          // Debug Log for significant moves
-                        if (box.unstackable || score < -10000) {
-                            projectDebugger.debug('Packer', `New Best (Rot): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + rotDim.h) });
-                        }
+                        // if (box.unstackable || score < -10000) {
+                        //    projectDebugger.debug('Packer', `New Best (Rot): ${box.name} at y=${anc.y}`, { score, topGap: cDim.h - (anc.y + rotDim.h) });
+                        // }
 
                         bestScore = score;
                         bestMove = {
