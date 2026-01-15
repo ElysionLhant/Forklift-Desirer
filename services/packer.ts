@@ -54,28 +54,40 @@ const calculateSupportArea = (
 const CheckSupportBelow = (
     boxX: number, boxY: number, boxZ: number, 
     boxL: number, boxW: number, 
-    placedItems: PlacedItem[]
+    xGridItems: PlacedItem[][],
+    GRID_SIZE: number
 ): { supportedArea: number, maxSupportBaseArea: number } => {
-    if (boxY === 0) return { supportedArea: boxL * boxW, maxSupportBaseArea: 999999 };
+    if (boxY < 0.1) return { supportedArea: boxL * boxW, maxSupportBaseArea: 999999 };
 
     let supportedArea = 0;
     let maxBaseArea = 0;
 
-    placedItems.forEach(item => {
-        // Check if item is directly below (allowing small tolerance)
-        const itemTop = item.position.y + item.dimensions.height;
-        if (Math.abs(itemTop - boxY) < 1.0) {
-            const overlap = calculateSupportArea(
-                boxX, boxZ, boxL, boxW,
-                item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
-            );
-            if (overlap > 0) {
-                supportedArea += overlap;
-                const itemBaseArea = item.dimensions.length * item.dimensions.width;
-                if (itemBaseArea > maxBaseArea) maxBaseArea = itemBaseArea;
-            }
+    const minBin = Math.floor(boxX / GRID_SIZE);
+    const maxBin = Math.floor((boxX + boxL) / GRID_SIZE);
+    const checkedIds = new Set<string>();
+
+    for (let b = minBin; b <= maxBin; b++) {
+        const bin = xGridItems[b];
+        if (!bin) continue;
+        for (const item of bin) {
+             if (checkedIds.has(item.id)) continue;
+             checkedIds.add(item.id);
+
+             // Check if item is directly below (allowing small tolerance)
+             const itemTop = item.position.y + item.dimensions.height;
+             if (Math.abs(itemTop - boxY) < 1.0) {
+                 const overlap = calculateSupportArea(
+                     boxX, boxZ, boxL, boxW,
+                     item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
+                 );
+                 if (overlap > 0) {
+                     supportedArea += overlap;
+                     const itemBaseArea = item.dimensions.length * item.dimensions.width;
+                     if (itemBaseArea > maxBaseArea) maxBaseArea = itemBaseArea;
+                 }
+             }
         }
-    });
+    }
     return { supportedArea, maxSupportBaseArea: maxBaseArea };
 };
 
@@ -89,124 +101,97 @@ const checkForkliftAccess = (
   targetPos: { x: number; y: number; z: number },
   boxDim: { l: number; w: number; h: number },
   containerDim: { l: number; w: number; h: number },
-  placedItems: PlacedItem[]
+  xGridItems: PlacedItem[][],
+  GRID_SIZE: number
 ): boolean => {
-    // If placing on top of something (Y > 0), check if we can reach the STACK BASE
-    // We assume forklift lifts from the aisle, then pushes/shifts onto the stack.
-    // The critical check is: Can the forklift chassis reach the position required to deposit this item?
-    // For high stacking, the chassis stays on the ground, but the mast must have clearance.
-    
-    // Simplification: We only simulate Ground Access for the Chassis.
-    // If placing at Y=100, the chassis is at Y=0. The path must be clear at Y=0.
-    
-    // ... existing logic checks path at ground level ...
-
     const boxCenterZ = targetPos.z + (boxDim.w / 2);
     const halfChassisW = FORKLIFT_WIDTH / 2;
-    // Increased shift capability to model expert operators capable of tight maneuvers
     const SIDE_SHIFT = 60; 
 
     // Wall constraints
-    // Center must be within [halfChassisW + Buffer, Width - halfChassisW - Buffer]
     const minWallZ = halfChassisW + WALL_BUFFER;
     const maxWallZ = containerDim.w - halfChassisW - WALL_BUFFER;
 
     // Reach constraints
-    // Chassis center must be close enough to box center
     const minReachZ = boxCenterZ - SIDE_SHIFT;
     const maxReachZ = boxCenterZ + SIDE_SHIFT;
 
     // Intersection to find initial valid range
-    // We check [minStart, maxStart]
     let validMinZ = Math.max(minWallZ, minReachZ);
     let validMaxZ = Math.min(maxWallZ, maxReachZ);
-    
-    // Valid Interval Logic
-    // If we are placing very high up (e.g. above 200cm), the mast is maximally extended.
-    // For standard container operations, we assume if the chassis can reach the X-position, 
-    // and the immediate stacking column is clear, the operator can maneuver the mast.
-    // So we primarily check for CHASSIS collisions at Y=0.
     
     // If even with shifting we hit walls or can't reach, it's invalid
     if (validMinZ > validMaxZ + 0.01) return false; 
 
     // 2. Filter Candidate Range against Obstacles in the Path
-    // Path: from box face (startX) to Door (endX)
-    // We strictly check for obstacles at CHASSIS HEIGHT (Y < 140cm).
-    // Items placed higher than 140cm do not block the chassis path.
     const startX = targetPos.x + boxDim.l;
     const endX = containerDim.l;
     
+    // Grid Optimization
+    const minBin = Math.max(0, Math.floor(startX / GRID_SIZE));
+    
     // We maintain a list of valid intervals for the chassis center Z.
-    // Initially just one interval: [validMinZ, validMaxZ]
     let validIntervals: {min: number, max: number}[] = [{ min: validMinZ, max: validMaxZ }];
 
-    for (const item of placedItems) {
-        // Optimization: If item is high up, it doesn't block the chassis driving on the floor
-        if (item.position.y > FORKLIFT_CHASSIS_HEIGHT) continue;
+    const checkedIds = new Set<string>();
 
-        // Broad Phase: If item is completely behind the path (closer to wall than startX), ignore
-        if (item.position.x + item.dimensions.length <= startX) continue;
-        // If item is completely outside the door (impossible but safe), ignore
-        if (item.position.x >= endX) continue;
+    for (let b = minBin; b < xGridItems.length; b++) {
+        const bin = xGridItems[b];
+        if (!bin) continue;
 
-        // X Overlap Check
-        const itemMinX = item.position.x;
-        const itemMaxX = item.position.x + item.dimensions.length;
-        // Check if item is in the path corridor [startX, endX]
-        const xOverlap = Math.max(0, Math.min(endX, itemMaxX) - Math.max(startX, itemMinX));
-        if (xOverlap <= 0.1) continue; 
-        
-        // Y Overlap Check
-        // Forklift mass occupies 0 to FORKLIFT_MAST_HEIGHT
-        const itemMinY = item.position.y;
-        const itemMaxY = item.position.y + item.dimensions.height;
-        const yOverlap = Math.max(0, Math.min(FORKLIFT_MAST_HEIGHT, itemMaxY) - Math.max(0, itemMinY));
-        if (yOverlap <= 0.1) continue;
+        for (const item of bin) {
+            if (checkedIds.has(item.id)) continue;
+            checkedIds.add(item.id);
 
-        // This item is an obstacle in the X-Path.
-        // It blocks any chassis Z-position where the chassis body overlaps the item.
-        // Item Z Range: [itemMinZ, itemMaxZ]
-        // Chassis (width W) at center C covers [C - W/2, C + W/2].
-        // Collision if [C - W/2, C + W/2] overlaps [itemMinZ, itemMaxZ].
-        // Rewrite as: Forbidden C Range = [itemMinZ - W/2, itemMaxZ + W/2]
-        
-        const itemMinZ = item.position.z;
-        const itemMaxZ = item.position.z + item.dimensions.width;
-        
-        const forbiddenMin = itemMinZ - halfChassisW; // Expanded by chassis radius
-        const forbiddenMax = itemMaxZ + halfChassisW;
+            // Optimization: If item is high up, it doesn't block the chassis driving on the floor
+            if (item.position.y > FORKLIFT_CHASSIS_HEIGHT) continue;
 
-        // Subtract forbidden range from validIntervals
-        const nextIntervals: {min: number, max: number}[] = [];
-        for (const interval of validIntervals) {
-             // Case 1: Forbidden covers entire interval -> Remove interval completely
-             if (forbiddenMin <= interval.min && forbiddenMax >= interval.max) continue;
-             
-             // Case 2: No overlap -> Keep interval as is
-             if (forbiddenMax <= interval.min || forbiddenMin >= interval.max) {
-                 nextIntervals.push(interval);
-                 continue;
-             }
-             
-             // Case 3: Partial overlap - Split
-             // If forbidden bites into the middle?
-             // Left remaining part
-             if (forbiddenMin > interval.min) {
-                 nextIntervals.push({ min: interval.min, max: forbiddenMin });
-             }
-             // Right remaining part
-             if (forbiddenMax < interval.max) {
-                 nextIntervals.push({ min: forbiddenMax, max: interval.max });
-             }
+            // Broad Phase
+            if (item.position.x + item.dimensions.length <= startX) continue;
+            if (item.position.x >= endX) continue;
+
+            // X Overlap Check
+            const itemMinX = item.position.x;
+            const itemMaxX = item.position.x + item.dimensions.length;
+            const xOverlap = Math.max(0, Math.min(endX, itemMaxX) - Math.max(startX, itemMinX));
+            if (xOverlap <= 0.1) continue; 
+            
+            // Y Overlap Check
+            const itemMinY = item.position.y;
+            const itemMaxY = item.position.y + item.dimensions.height;
+            const yOverlap = Math.max(0, Math.min(FORKLIFT_MAST_HEIGHT, itemMaxY) - Math.max(0, itemMinY));
+            if (yOverlap <= 0.1) continue;
+
+            // Z Overlap
+            const itemMinZ = item.position.z;
+            const itemMaxZ = item.position.z + item.dimensions.width;
+            
+            const forbiddenMin = itemMinZ - halfChassisW; 
+            const forbiddenMax = itemMaxZ + halfChassisW;
+
+            // Subtract forbidden range from validIntervals
+            const nextIntervals: {min: number, max: number}[] = [];
+            for (const interval of validIntervals) {
+                 if (forbiddenMin <= interval.min && forbiddenMax >= interval.max) continue;
+                 
+                 if (forbiddenMax <= interval.min || forbiddenMin >= interval.max) {
+                     nextIntervals.push(interval);
+                     continue;
+                 }
+                 
+                 if (forbiddenMin > interval.min) {
+                     nextIntervals.push({ min: interval.min, max: forbiddenMin });
+                 }
+                 if (forbiddenMax < interval.max) {
+                     nextIntervals.push({ min: forbiddenMax, max: interval.max });
+                 }
+            }
+            validIntervals = nextIntervals;
+            
+            if (validIntervals.length === 0) return false;
         }
-        validIntervals = nextIntervals;
-        
-        // Optimization: If no valid intervals left, we can stop early
-        if (validIntervals.length === 0) return false;
     }
     
-    // If any interval remains, simulation says "Yes, there is a path!"
     return validIntervals.length > 0;
 };
 
@@ -214,40 +199,65 @@ const checkValidity = (
   pos: { x: number; y: number; z: number },
   dim: { l: number; w: number; h: number },
   containerDim: { l: number; w: number; h: number },
-  placedItems: PlacedItem[]
+  xGridItems: PlacedItem[][],
+  GRID_SIZE: number
 ): boolean => {
   if (pos.x + dim.l > containerDim.l) return false;
   
-  // Height check: Must leave 15cm for forklift operation
   const maxStackHeight = containerDim.h - FORKLIFT_LIFT_MARGIN;
   if (pos.y + dim.h > maxStackHeight) return false;
   
   if (pos.z + dim.w > containerDim.w) return false;
 
-  for (const item of placedItems) {
-    const intersectX = pos.x < item.position.x + item.dimensions.length && pos.x + dim.l > item.position.x;
-    const intersectY = pos.y < item.position.y + item.dimensions.height && pos.y + dim.h > item.position.y;
-    const intersectZ = pos.z < item.position.z + item.dimensions.width && pos.z + dim.w > item.position.z;
-    if (intersectX && intersectY && intersectZ) return false;
+  // Grid Collision Check
+  const minBin = Math.floor(pos.x / GRID_SIZE);
+  const maxBin = Math.floor((pos.x + dim.l) / GRID_SIZE);
+  
+  // NOTE: We do NOT use checkedIds for collision to save allocation, relying on fast AABB checks
+  for (let b = minBin; b <= maxBin; b++) {
+      const bin = xGridItems[b];
+      if (!bin) continue;
+      for (const item of bin) {
+            // Collision logic
+            if (
+                pos.x < item.position.x + item.dimensions.length && 
+                pos.x + dim.l > item.position.x &&
+                pos.y < item.position.y + item.dimensions.height && 
+                pos.y + dim.h > item.position.y &&
+                pos.z < item.position.z + item.dimensions.width && 
+                pos.z + dim.w > item.position.z
+            ) {
+                return false;
+            }
+      }
   }
 
   // Check if forklift can technically reach this position without collision
-  if (!checkForkliftAccess(pos, dim, containerDim, placedItems)) return false;
+  if (!checkForkliftAccess(pos, dim, containerDim, xGridItems, GRID_SIZE)) return false;
 
   if (pos.y > 0) {
       let totalSupportArea = 0;
       const requiredArea = dim.l * dim.w;
-      for (const item of placedItems) {
-        if (Math.abs((item.position.y + item.dimensions.height) - pos.y) < 0.1) {
-           const area = calculateSupportArea(
-             pos.x, pos.z, dim.l, dim.w,
-             item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
-           );
-           if (area > 0) {
-               if (item.unstackable) return false;
-               totalSupportArea += area;
-           }
-        }
+      const supportCheckedIds = new Set<string>();
+
+      for (let b = minBin; b <= maxBin; b++) {
+          const bin = xGridItems[b];
+          if (!bin) continue;
+          for (const item of bin) {
+              if (supportCheckedIds.has(item.id)) continue;
+              supportCheckedIds.add(item.id);
+
+              if (Math.abs((item.position.y + item.dimensions.height) - pos.y) < 0.1) {
+                 const area = calculateSupportArea(
+                   pos.x, pos.z, dim.l, dim.w,
+                   item.position.x, item.position.z, item.dimensions.length, item.dimensions.width
+                 );
+                 if (area > 0) {
+                     if (item.unstackable) return false;
+                     totalSupportArea += area;
+                 }
+              }
+          }
       }
       if ((totalSupportArea / requiredArea) < 0.70) return false;
   }
@@ -327,7 +337,7 @@ const packSingleContainerAsync = async (
         const step = 1.0; // Reduced from 5.0 to 1.0 to find small gaps for Copper Profiles
         while (optimizedZ - step >= 0) {
              const testPos = { ...startPos, z: optimizedZ - step };
-             if (checkValidity(testPos, dim, cDim, placedItems)) {
+             if (checkValidity(testPos, dim, cDim, xGridItems, GRID_SIZE)) {
                  optimizedZ -= step;
              } else {
                  break;
@@ -465,7 +475,7 @@ const packSingleContainerAsync = async (
                 const anc = anchors[a];
 
                 // 1. Check Normal Orientation
-                if (checkValidity(anc, box.dim, cDim, placedItems)) {
+                if (checkValidity(anc, box.dim, cDim, xGridItems, GRID_SIZE)) {
                     const optZ = optimizeZ(anc, box.dim);
                     const finalPos = { x: anc.x, y: anc.y, z: optZ };
                     
@@ -516,7 +526,8 @@ const packSingleContainerAsync = async (
                             const { supportedArea, maxSupportBaseArea } = CheckSupportBelow(
                                 finalPos.x, finalPos.y, finalPos.z, 
                                 box.dim.l, box.dim.w, 
-                                placedItems
+                                xGridItems,
+                                GRID_SIZE
                             );
                             
                             const myArea = box.dim.l * box.dim.w;
@@ -572,7 +583,7 @@ const packSingleContainerAsync = async (
 
                 // 2. Check Rotated Orientation
                 const rotDim = { l: box.dim.w, w: box.dim.l, h: box.dim.h };
-                if (checkValidity(anc, rotDim, cDim, placedItems)) {
+                if (checkValidity(anc, rotDim, cDim, xGridItems, GRID_SIZE)) {
                     const optZ = optimizeZ(anc, rotDim);
                     const finalPos = { x: anc.x, y: anc.y, z: optZ };
 
@@ -604,7 +615,8 @@ const packSingleContainerAsync = async (
                             const { supportedArea, maxSupportBaseArea } = CheckSupportBelow(
                                 finalPos.x, finalPos.y, finalPos.z, 
                                 rotDim.l, rotDim.w, 
-                                placedItems
+                                xGridItems,
+                                GRID_SIZE
                             );
                             
                             const myArea = rotDim.l * rotDim.w;

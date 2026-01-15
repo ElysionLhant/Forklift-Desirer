@@ -2,6 +2,9 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Suppress Autofill warnings
+app.commandLine.appendSwitch('disable-features', 'Autofill');
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow;

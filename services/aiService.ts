@@ -228,7 +228,7 @@ export class AIService {
           model: model,
           messages: [
               { role: 'system', content: sysPrompt },
-              { role: 'user', content: this.config.provider === 'lmstudio' ? (contextStr === 'NO_CONTEXT' ? msg.text : `${contextStr}\n\nUser: ${msg.text}`) : content } 
+              { role: 'user', content: content } 
           ],
           temperature: sysPrompt === DATA_EXTRACTION_PROMPT ? 0.0 : 0.7
       };

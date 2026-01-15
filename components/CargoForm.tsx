@@ -19,7 +19,6 @@ interface FormState {
     h: number | '';
     weight: number | '';
     qty: number | '';
-    priority: number | '';
     unstackable: boolean;
 }
 
@@ -31,7 +30,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
     h: 100,
     weight: '',
     qty: 1,
-    priority: '',
     unstackable: false
   });
 
@@ -86,7 +84,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
       },
       weight: finalWeight,
       quantity: formData.qty as number,
-      groupPriority: formData.priority === '' ? undefined : (formData.priority as number),
       color: MOCK_CARGO_COLORS[items.length % MOCK_CARGO_COLORS.length],
       unstackable: formData.unstackable
     };
@@ -101,7 +98,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
         h: 100, 
         weight: '', 
         qty: 1, 
-        priority: '',
         unstackable: false
     });
     setErrors({});
@@ -182,16 +178,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
                 onChange={e => handleInputChange('weight', e.target.value)} 
             />
         </div>
-        <div>
-            <label className="text-xs font-medium text-gray-500">Priority (Group)</label>
-            <input 
-                type="number" 
-                className="w-full p-2 border rounded-md text-sm"
-                placeholder="Lower = Packed First"
-                value={formData.priority}
-                onChange={e => handleInputChange('priority', e.target.value)} 
-            />
-        </div>
         <div className="col-span-1 flex flex-col justify-center">
             <label className="flex items-center gap-2 cursor-pointer group">
                 <input 
@@ -235,11 +221,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
                             {item.dimensions.length}x{item.dimensions.width}x{item.dimensions.height} | {item.weight}kg | x{item.quantity}
                         </p>
                         <div className="flex flex-wrap gap-1 mt-0.5">
-                            {item.groupPriority !== undefined && (
-                                <span className="inline-flex items-center gap-0.5 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
-                                    Priority: {item.groupPriority}
-                                </span>
-                            )}
                             {item.unstackable && (
                                 <span className="inline-flex items-center gap-0.5 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
                                     <Layers className="w-3 h-3" /> Unstackable

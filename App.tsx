@@ -38,6 +38,7 @@ export default function App() {
   const [packingProgress, setPackingProgress] = useState('');
   const [pendingCargoUpdate, setPendingCargoUpdate] = useState<any[] | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,13 +78,10 @@ export default function App() {
 
   const handleLoadDemo = () => {
     setCargoItems([
-      { id: '1', name: 'Connector Male', dimensions: { length: 59, width: 39, height: 36 }, weight: 16.5, quantity: 334, color: '#2563eb', groupPriority: 1 },
-      { id: '2', name: 'Cable Tie', dimensions: { length: 57, width: 36, height: 30 }, weight: 15.5, quantity: 168, color: '#f59e0b', groupPriority: 1 },
-      { id: '3', name: 'Connector Female', dimensions: { length: 59, width: 39, height: 36 }, weight: 16.5, quantity: 334, color: '#db2777', groupPriority: 2 },
-      { id: '4', name: 'Terminal Male', dimensions: { length: 33, width: 32, height: 27 }, weight: 13, quantity: 50, color: '#dc2626', groupPriority: 3 },
-      { id: '5', name: 'Solar Panel Connector Cap', dimensions: { length: 46, width: 35, height: 31 }, weight: 8.6, quantity: 400, color: '#16a34a', groupPriority: 4 },
-      { id: '6', name: 'Copper profile', dimensions: { length: 203, width: 11, height: 5 }, weight: 9.87, quantity: 600, color: '#ca8a04', groupPriority: 5 },
-      { id: '7', name: 'Terminal Female', dimensions: { length: 42, width: 27.5, height: 19 }, weight: 6.7, quantity: 700, color: '#9333ea', groupPriority: 6 },
+      { id: '1', name: 'Industrial Machine Unit A', dimensions: { length: 210, width: 130, height: 140 }, weight: 1200, quantity: 12, color: '#2563eb' },
+      { id: '2', name: 'Power Supply Cabinet', dimensions: { length: 110, width: 90, height: 180 }, weight: 450, quantity: 24, color: '#dc2626' },
+      { id: '3', name: 'Heavy Duty Compressor', dimensions: { length: 150, width: 100, height: 110 }, weight: 680, quantity: 16, color: '#d97706' },
+      { id: '4', name: 'Spare Parts Crate', dimensions: { length: 120, width: 80, height: 80 }, weight: 180, quantity: 30, color: '#16a34a' },
     ]);
   };
 
@@ -300,13 +298,50 @@ export default function App() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
-          const file = e.target.files[0];
-          const reader = new FileReader();
-          reader.onload = (evt) => {
-              const base64 = evt.target?.result as string;
-              setAttachments(prev => [...prev, { type: 'image', url: URL.createObjectURL(file), base64 }]);
-          };
-          reader.readAsDataURL(file);
+          processFile(e.target.files[0]);
+      }
+  };
+
+  const processFile = (file: File) => {
+      if (!file.type.startsWith('image/')) {
+          alert("Only image files are currently supported.");
+          return;
+      }
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+          const base64 = evt.target?.result as string;
+          setAttachments(prev => [...prev, { type: 'image', url: URL.createObjectURL(file), base64 }]);
+      };
+      reader.readAsDataURL(file);
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Ensure we don't flicker if dragging over child elements
+      if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+      setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          Array.from(e.dataTransfer.files).forEach(file => processFile(file));
       }
   };
 
@@ -476,7 +511,21 @@ export default function App() {
         </div>
 
         <div className="lg:col-span-3 space-y-6 flex flex-col h-[calc(100vh-100px)]">
-            <div className="flex flex-col bg-white rounded-xl shadow-lg border border-indigo-100 overflow-hidden flex-1">
+            <div 
+                className={`flex flex-col bg-white rounded-xl shadow-lg border border-indigo-100 overflow-hidden flex-1 transition-colors relative ${isDragging ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-400' : ''}`}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+            >
+                {/* Drag Overlay */}
+                {isDragging && (
+                    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm pointer-events-none">
+                        <Paperclip className="w-12 h-12 text-indigo-600 mb-2 animate-bounce" />
+                        <p className="text-lg font-bold text-indigo-700">Drop images here</p>
+                    </div>
+                )}
+
                 <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-3 text-white flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <BrainCircuit className="w-4 h-4" />
@@ -521,6 +570,24 @@ export default function App() {
                     {isChatLoading && <div className="animate-pulse text-xs text-gray-400 p-2 text-center">AI is analyzing...</div>}
                     <div ref={chatEndRef} />
                 </div>
+
+                {/* Attachment Preview Area */}
+                {attachments.length > 0 && (
+                    <div className="px-4 py-2 flex gap-2 overflow-x-auto bg-gray-50 border-t border-gray-200">
+                        {attachments.map((att, i) => (
+                            <div key={i} className="relative group shrink-0">
+                                <img src={att.url} alt="attachment" className="h-16 w-16 object-cover rounded-md border border-gray-300 shadow-sm" />
+                                <button 
+                                    onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}
+                                    className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 shadow-md hover:bg-red-600 transition-colors"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 <div className="p-3 bg-white border-t border-gray-100">
                     <div className="relative flex items-center gap-2">
                         <button onClick={() => fileInputRef.current?.click()} className="text-gray-400 hover:text-indigo-600"><Paperclip className="w-5 h-5" /></button>
