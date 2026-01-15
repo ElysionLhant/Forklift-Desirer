@@ -274,7 +274,11 @@ const packSingleContainerAsync = async (
     const candidatePool = [...boxes];
     let currentWeight = 0;
 
-    const ADHESION_BONUS = 600; 
+    // ADHESION_BONUS: Bonus for placing item next to same type.
+    // Score unit is approx 1 = 1cm Z.
+    // 600 = 6 meters preference (Too high, causes gaps to be ignored).
+    // Reduced to 50 (50cm) to allow filling significant gaps with different items.
+    const ADHESION_BONUS = 50;  
 
     // PRE-CALCULATION / LOOKAHEAD
     // Analyze the unstackable items to understand what kind of "Headroom" we need to preserve.
