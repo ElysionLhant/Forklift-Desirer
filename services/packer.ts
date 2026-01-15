@@ -266,7 +266,7 @@ const packSingleContainerAsync = async (
         if (startPos.y > 0.1) return startPos.z;
 
         let optimizedZ = startPos.z;
-        const step = 5.0; // Increased from 0.5 to 5.0 to prevent performance freeze and improve alignment
+        const step = 1.0; // Reduced from 5.0 to 1.0 to find small gaps for Copper Profiles
         while (optimizedZ - step >= 0) {
              const testPos = { ...startPos, z: optimizedZ - step };
              if (checkValidity(testPos, dim, cDim, placedItems)) {
@@ -356,27 +356,36 @@ const packSingleContainerAsync = async (
                     
                     // Helper: logic to score unstackables
                     if (box.unstackable) {
-                         if (anc.y === 0) {
-                             score += 10000000; // HUGE Penalize floor placement to force them to be top-fillers
+                         // Removed the massive floor penalty (100M).
+                         // We rely on the "Gap Strategy" to penalize floor placement 
+                         // only if it implies wasting vertical space (topGap > 40).
+                         
+                         // GAP STRATEGY FOR UNSTACKABLES
+                         // We only want to place unstackables near the top to avoid wasting vertical space.
+                         const topGap = cDim.h - (anc.y + box.dim.h);
+                         
+                         if (topGap > 40) {
+                             // If placing this leaves a huge gap (e.g. at bottom of stack), PENALIZE IT.
+                             // We want to force the packer to build stacks higher with stackable items first.
+                             score += 1000000;
                          } else {
-                             // GAP STRATEGY FOR UNSTACKABLES
-                             // We want them to fill the "Trash Gaps" (small gaps at top).
-                             const topGap = cDim.h - (anc.y + box.dim.h);
-                             
-                             // Perfect fit (flush with ceiling) -> Mega Bonus
-                             if (topGap < 5) { 
-                                 score -= 500000; 
-                             } 
-                             // High placement -> Good Bonus (The higher the better)
-                             else {
-                                 // Add bonus proportional to height (higher Y = lower score)
-                                 score -= (anc.y * 100); 
-                             }
+                             // We are near the top. Encourage placing unstackables here!
+                             score -= 500000;
                          }
                     } else {
                         // STACKABLE STRATEGY
+                        // Soft penalty for stacking Orange Connectors (Connector Female) to prefer spreading them
+                        if (box.name.includes('Connector Female') && anc.y > 0) {
+                            score += 50000;
+                        }
+
                         if (anc.x < cDim.l * 0.5) score -= 5000;
-                        if (anc.x > cDim.l * 0.8 && anc.y > cDim.h * 0.5) score += 50000;
+
+                        // PROGRESSIVE STACKING PENALTY (Slope Effect)
+                        // As we move towards the door (increasing X), placing items high up becomes increasingly expensive.
+                        // This forces high stacks to be deep inside the container (low X).
+                        // Factor 2.0: At X=1200, Y=250 -> Penalty ~600,000. 
+                        score += (anc.x * anc.y * 2.0);
 
                         const currentTopY = anc.y + box.dim.h;
                         const gapRemaining = cDim.h - currentTopY;
@@ -425,20 +434,23 @@ const packSingleContainerAsync = async (
                     let score = (anc.x * 10000) + (anc.y * 10) + optZ;
                     
                     if (box.unstackable) {
-                         if (anc.y === 0) {
-                             score += 10000000;
+                         const topGap = cDim.h - (anc.y + rotDim.h);
+                         if (topGap > 40) {
+                             score += 1000000; // Don't cap stacks early
                          } else {
-                             const topGap = cDim.h - (anc.y + rotDim.h);
-                             if (topGap < 5) { // Perfect fit
-                                 score -= 500000; 
-                             } else {
-                                 score -= (anc.y * 100); 
-                             }
+                             score -= 500000; // Prefer top slots
                          }
                     } else {
                         // STACKABLE SCORING
+                        // Soft penalty for stacking Orange Connectors (Connector Female) to prefer spreading them
+                        if (box.name.includes('Connector Female') && anc.y > 0) {
+                            score += 50000;
+                        }
+
                         if (anc.x < cDim.l * 0.5) score -= 5000; // Prefer Back
-                        if (anc.x > cDim.l * 0.8 && anc.y > cDim.h * 0.5) score += 50000; // Avoid Door Tower
+                        
+                        // PROGRESSIVE STACKING PENALTY (Slope Effect) - Rotated
+                        score += (anc.x * anc.y * 2.0);
 
                         const currentTopY = anc.y + rotDim.h;
                         const gapRemaining = cDim.h - currentTopY;
@@ -560,22 +572,16 @@ export const calculateShipmentAsync = async (
   });
 
   boxesToPack.sort((a, b) => {
-      // Priority 1: Unstackable items LAST.
-      // We want to build the "Stackable Matrix" first, creating flat surfaces.
-      // Then we fill the remaining gaps (especially top gaps) with unstackables.
-      if (a.unstackable !== b.unstackable) {
-          return (a.unstackable ? 1 : 0) - (b.unstackable ? 1 : 0);
-      }
-      
-      // Priority 2: Base Area Descending (Big footprints first)
-      // This creates larger, more stable platforms for subsequent layers.
-      const areaA = a.dim.l * a.dim.w;
-      const areaB = b.dim.l * b.dim.w;
-      if (Math.abs(areaB - areaA) > 100) {
+      // Priority 1: Base Area Descending (Big Footprints First to allow stacking small on big)
+      const areaA = a.dim.w * a.dim.l;
+      const areaB = b.dim.w * b.dim.l;
+      if (Math.abs(areaA - areaB) > 100) {
           return areaB - areaA;
       }
 
-      // Priority 3: Height Descending
+      // Priority 2: Height Descending (build stable layers)
+      // We want to pack tallest items first to establish the layer height.
+      // Small items can fill gaps later.
       return b.dim.h - a.dim.h;
   });
 
