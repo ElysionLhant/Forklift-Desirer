@@ -53,12 +53,20 @@ const checkForkliftAccess = (
   containerDim: { l: number; w: number; h: number },
   placedItems: PlacedItem[]
 ): boolean => {
-    // 1. Define Candidate Range for Chassis Center based on reach and walls
-    // The forklift has some ability to shift sideways (side shift) or approach at slight angle.
-    // We search for ANY valid chassis Z-position that allows the forks to pick up the box.
+    // If placing on top of something (Y > 0), check if we can reach the STACK BASE
+    // We assume forklift lifts from the aisle, then pushes/shifts onto the stack.
+    // The critical check is: Can the forklift chassis reach the position required to deposit this item?
+    // For high stacking, the chassis stays on the ground, but the mast must have clearance.
+    
+    // Simplification: We only simulate Ground Access for the Chassis.
+    // If placing at Y=100, the chassis is at Y=0. The path must be clear at Y=0.
+    
+    // ... existing logic checks path at ground level ...
+
     const boxCenterZ = targetPos.z + (boxDim.w / 2);
     const halfChassisW = FORKLIFT_WIDTH / 2;
-    const SIDE_SHIFT = 50; // Increased to 50cm to simulate skilled operation/angle approach
+    // Increased shift capability to model expert operators capable of tight maneuvers
+    const SIDE_SHIFT = 60; 
 
     // Wall constraints
     // Center must be within [halfChassisW + Buffer, Width - halfChassisW - Buffer]
@@ -75,11 +83,19 @@ const checkForkliftAccess = (
     let validMinZ = Math.max(minWallZ, minReachZ);
     let validMaxZ = Math.min(maxWallZ, maxReachZ);
     
+    // Valid Interval Logic
+    // If we are placing very high up (e.g. above 200cm), the mast is maximally extended.
+    // For standard container operations, we assume if the chassis can reach the X-position, 
+    // and the immediate stacking column is clear, the operator can maneuver the mast.
+    // So we primarily check for CHASSIS collisions at Y=0.
+    
     // If even with shifting we hit walls or can't reach, it's invalid
     if (validMinZ > validMaxZ + 0.01) return false; 
 
     // 2. Filter Candidate Range against Obstacles in the Path
     // Path: from box face (startX) to Door (endX)
+    // We strictly check for obstacles at CHASSIS HEIGHT (Y < 140cm).
+    // Items placed higher than 140cm do not block the chassis path.
     const startX = targetPos.x + boxDim.l;
     const endX = containerDim.l;
     
@@ -88,6 +104,9 @@ const checkForkliftAccess = (
     let validIntervals: {min: number, max: number}[] = [{ min: validMinZ, max: validMaxZ }];
 
     for (const item of placedItems) {
+        // Optimization: If item is high up, it doesn't block the chassis driving on the floor
+        if (item.position.y > FORKLIFT_CHASSIS_HEIGHT) continue;
+
         // Broad Phase: If item is completely behind the path (closer to wall than startX), ignore
         if (item.position.x + item.dimensions.length <= startX) continue;
         // If item is completely outside the door (impossible but safe), ignore
@@ -212,134 +231,170 @@ const packSingleContainer = (
 
     const placedItems: PlacedItem[] = [];
     let anchors: Anchor[] = [{ x: 0, y: 0, z: 0 }];
-    const remainingBoxes: BoxToPack[] = [];
+    
+    // Change to Best-Fit: Maintain a candidate pool
+    const candidatePool = [...boxes];
     let currentWeight = 0;
 
-    for (const box of boxes) {
-        if (currentWeight + box.wt > containerSpec.maxWeight) {
-            remainingBoxes.push(box);
-            continue;
-        }
+    const ADHESION_BONUS = 600; 
 
-        if (!canFitThroughDoor(box, containerSpec.doorDimensions)) {
-            remainingBoxes.push(box);
-            continue;
-        }
+    // Helper to optimize position by sliding left (decreasing Z)
+    const optimizeZ = (startPos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}) => {
+        // Fix for "Staircase" / Offset issue:
+        // If we are stacking on top of something (y > 0), we should strictly align with the support item below (the anchor source).
+        // Sliding Z while stacking causes overhangs because checkValidity allows ~30% overhang.
+        // We want perfect stacking alignment.
+        if (startPos.y > 0.1) return startPos.z;
 
-        let bestAnchorIndex = -1;
-        let bestOrientationIsRotated = false;
-        let bestScore = Number.MAX_SAFE_INTEGER;
-        let bestPos = { x: 0, y: 0, z: 0 };
+        let optimizedZ = startPos.z;
+        const step = 0.5; // High precision for tight stacking
+        while (optimizedZ - step >= 0) {
+             const testPos = { ...startPos, z: optimizedZ - step };
+             if (checkValidity(testPos, dim, cDim, placedItems)) {
+                 optimizedZ -= step;
+             } else {
+                 break;
+             }
+        }
+        return optimizedZ;
+    };
+
+    const hasSameTypeNeighbor = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}, cId: string) => {
+        // Check for proximity (within 1cm) to any placed item with same Cargo ID
+        const PROXIMITY = 1.0;
+        const bounds = {
+            minX: pos.x - PROXIMITY, maxX: pos.x + dim.l + PROXIMITY,
+            minY: pos.y - PROXIMITY, maxY: pos.y + dim.h + PROXIMITY,
+            minZ: pos.z - PROXIMITY, maxZ: pos.z + dim.w + PROXIMITY
+        };
         
-        // Bonus for touching an item of the exact same Cargo ID (Group Affinity)
-        // Enough to overcome Z-sorting (width ~235), but less than Y-sorting (1000)
-        const ADHESION_BONUS = 600; 
-
-        // Helper to optimize position by sliding left (decreasing Z)
-        const optimizeZ = (startPos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}) => {
-            let optimizedZ = startPos.z;
-            const step = 5; 
-            while (optimizedZ - step >= 0) {
-                 const testPos = { ...startPos, z: optimizedZ - step };
-                 if (checkValidity(testPos, dim, cDim, placedItems)) {
-                     optimizedZ -= step;
-                 } else {
-                     break;
-                 }
-            }
-            return optimizedZ;
-        };
-
-        const hasSameTypeNeighbor = (pos: {x: number, y: number, z: number}, dim: {l: number, w: number, h: number}, cId: string) => {
-            // Check for proximity (within 1cm) to any placed item with same Cargo ID
-            const PROXIMITY = 1.0;
-            const bounds = {
-                minX: pos.x - PROXIMITY, maxX: pos.x + dim.l + PROXIMITY,
-                minY: pos.y - PROXIMITY, maxY: pos.y + dim.h + PROXIMITY,
-                minZ: pos.z - PROXIMITY, maxZ: pos.z + dim.w + PROXIMITY
-            };
+        for (const item of placedItems) {
+            if (item.cargoId !== cId) continue;
             
-            for (const item of placedItems) {
-                if (item.cargoId !== cId) continue;
-                
-                const itemMinX = item.position.x;
-                const itemMaxX = item.position.x + item.dimensions.length;
-                const itemMinY = item.position.y;
-                const itemMaxY = item.position.y + item.dimensions.height;
-                const itemMinZ = item.position.z;
-                const itemMaxZ = item.position.z + item.dimensions.width;
+            const itemMinX = item.position.x;
+            const itemMaxX = item.position.x + item.dimensions.length;
+            const itemMinY = item.position.y;
+            const itemMaxY = item.position.y + item.dimensions.height;
+            const itemMinZ = item.position.z;
+            const itemMaxZ = item.position.z + item.dimensions.width;
 
-                if (bounds.minX < itemMaxX && bounds.maxX > itemMinX &&
-                    bounds.minY < itemMaxY && bounds.maxY > itemMinY &&
-                    bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
-                    return true;
-                }
+            if (bounds.minX < itemMaxX && bounds.maxX > itemMinX &&
+                bounds.minY < itemMaxY && bounds.maxY > itemMinY &&
+                bounds.minZ < itemMaxZ && bounds.maxZ > itemMinZ) {
+                return true;
             }
-            return false;
-        };
+        }
+        return false;
+    };
 
-        for (let i = 0; i < anchors.length; i++) {
-            const anc = anchors[i];
-            
-            // Check Normal Orientation
-            if (checkValidity(anc, box.dim, cDim, placedItems)) {
-                // Optimization: Try to slide left (reduce Z)
-                const optZ = optimizeZ(anc, box.dim);
-                const finalPos = { x: anc.x, y: anc.y, z: optZ };
-                
-                // Base score: X (Depth) > Y (Vertical) > Z (Horizontal)
-                // Minimizing X fills back first. Minimizing Y fills floor first. Minimizing Z fills left first.
-                let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
-                
-                // Apply Adhesion Bonus
-                if (hasSameTypeNeighbor(finalPos, box.dim, box.cargoId)) {
-                    score -= ADHESION_BONUS;
-                }
+    // Main Loop: Iterate until no more boxes can be placed
+    while (candidatePool.length > 0) {
+        let bestMove: {
+            boxIndex: number;
+            anchorIndex: number;
+            isRotated: boolean;
+            score: number;
+            pos: { x: number; y: number; z: number };
+        } | null = null;
+        let bestScore = Number.MAX_SAFE_INTEGER;
 
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestAnchorIndex = i;
-                    bestOrientationIsRotated = false;
-                    bestPos = finalPos;
-                }
+        // Optimization: Deduplicate checks for identical items.
+        // Instead of checking all 1000 items, we only check the first instance of each unique cargoId.
+        const indicesToCheck: number[] = [];
+        const typesChecked = new Set<string>();
+        for (let i = 0; i < candidatePool.length; i++) {
+            if (!typesChecked.has(candidatePool[i].cargoId)) {
+                typesChecked.add(candidatePool[i].cargoId);
+                indicesToCheck.push(i);
             }
-            
-            // Check Rotated Orientation
-            const rotDim = { l: box.dim.w, w: box.dim.l, h: box.dim.h };
-            if (checkValidity(anc, rotDim, cDim, placedItems)) {
-                // Optimization: Try to slide left (reduce Z)
-                const optZ = optimizeZ(anc, rotDim);
-                const finalPos = { x: anc.x, y: anc.y, z: optZ };
+        }
 
-                let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+        // Try to place representatives of each unique item type on EVERY anchor
+        for (const b of indicesToCheck) {
+            const box = candidatePool[b];
 
-                if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
-                    score -= ADHESION_BONUS;
+            if (currentWeight + box.wt > containerSpec.maxWeight) continue;
+            if (!canFitThroughDoor(box, containerSpec.doorDimensions)) continue;
+
+            for (let a = 0; a < anchors.length; a++) {
+                const anc = anchors[a];
+
+                // 1. Check Normal Orientation
+                if (checkValidity(anc, box.dim, cDim, placedItems)) {
+                    const optZ = optimizeZ(anc, box.dim);
+                    const finalPos = { x: anc.x, y: anc.y, z: optZ };
+                    
+                    // Smart Scoring
+                    let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+                    
+                    // PENALTY: Unstackable on Floor
+                    // We strongly discourage placing unstackable items on the ground if they can go on top of something.
+                    if (anc.y === 0 && box.unstackable) score += 1000000;
+                    
+                    // REMOVED BONUS: Unstackable on Ceiling
+                    // Previously we gave -20000 bonus, which caused unstackables to "jump the queue" and cap stacks prematurely.
+                    // By removing this, we rely on the SORT ORDER (Stackables First).
+                    // This ensures Red boxes stack as high as possible (Red on Red on Red) before an Unstackable is finally placed on top.
+
+                    // Adhesion
+                    if (hasSameTypeNeighbor(finalPos, box.dim, box.cargoId)) {
+                        score -= ADHESION_BONUS;
+                    }
+
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestMove = {
+                            boxIndex: b,
+                            anchorIndex: a,
+                            isRotated: false,
+                            score: score,
+                            pos: finalPos
+                        };
+                    }
                 }
-                
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestAnchorIndex = i;
-                    bestOrientationIsRotated = true;
-                    bestPos = finalPos;
+
+                // 2. Check Rotated Orientation
+                const rotDim = { l: box.dim.w, w: box.dim.l, h: box.dim.h };
+                if (checkValidity(anc, rotDim, cDim, placedItems)) {
+                    const optZ = optimizeZ(anc, rotDim);
+                    const finalPos = { x: anc.x, y: anc.y, z: optZ };
+
+                    let score = (anc.x * 100000) + (anc.y * 1000) + optZ;
+                    if (anc.y === 0 && box.unstackable) score += 1000000;
+                    // if (anc.y > 0 && box.unstackable) score -= 20000; // Removed to prevent premature capping
+                    
+                    if (hasSameTypeNeighbor(finalPos, rotDim, box.cargoId)) {
+                        score -= ADHESION_BONUS;
+                    }
+
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestMove = {
+                            boxIndex: b,
+                            anchorIndex: a,
+                            isRotated: true,
+                            score: score,
+                            pos: finalPos
+                        };
+                    }
                 }
             }
         }
 
-        if (bestAnchorIndex !== -1) {
-            const finalDim = bestOrientationIsRotated 
+        if (bestMove) {
+            const box = candidatePool[bestMove.boxIndex];
+            const finalDim = bestMove.isRotated 
                 ? { length: box.dim.w, width: box.dim.l, height: box.dim.h }
                 : { length: box.dim.l, width: box.dim.w, height: box.dim.h };
             
-            // Use the Optimized Position (bestPos) instead of the Anchor's original position
-            const finalPos = bestPos; 
+            const finalPos = bestMove.pos;
 
             placedItems.push({
                 id: `c${containerIndex}-b${placedItems.length}`,
                 cargoId: box.cargoId,
                 position: { x: finalPos.x, y: finalPos.y, z: finalPos.z },
                 dimensions: finalDim,
-                rotation: bestOrientationIsRotated,
+                rotation: bestMove.isRotated,
                 color: box.color,
                 name: box.name,
                 weight: box.wt,
@@ -349,7 +404,10 @@ const packSingleContainer = (
             });
             currentWeight += box.wt;
 
-            // Generate new anchors from the Final Position
+            // Remove box from pool
+            candidatePool.splice(bestMove.boxIndex, 1);
+
+            // Update Anchors
             anchors.push({ x: finalPos.x, y: finalPos.y + finalDim.height, z: finalPos.z });
             anchors.push({ x: finalPos.x, y: finalPos.y, z: finalPos.z + finalDim.width });
             anchors.push({ x: finalPos.x + finalDim.length, y: finalPos.y, z: finalPos.z });
@@ -357,7 +415,8 @@ const packSingleContainer = (
             anchors.sort((a, b) => (a.x - b.x) || (a.y - b.y) || (a.z - b.z));
             anchors = anchors.filter(a => a.x < cDim.l && a.y < (cDim.h - FORKLIFT_LIFT_MARGIN) && a.z < cDim.w);
         } else {
-            remainingBoxes.push(box);
+            // No valid move found for ANY box
+            break;
         }
     }
 
@@ -375,7 +434,7 @@ const packSingleContainer = (
             weightUtilization: (currentWeight / containerSpec.maxWeight) * 100,
             totalCargoCount: placedItems.length
         },
-        remainingBoxes
+        remainingBoxes: candidatePool
     };
 };
 
@@ -400,7 +459,18 @@ export const calculateShipment = (
     }
   });
 
-  boxesToPack.sort((a, b) => (b.dim.h - a.dim.h) || (b.dim.l * b.dim.w - a.dim.l * a.dim.w));
+  boxesToPack.sort((a, b) => {
+      // Priority 1: Stackable items first (False=0 < True=1)
+      if (a.unstackable !== b.unstackable) {
+          return (a.unstackable ? 1 : 0) - (b.unstackable ? 1 : 0);
+      }
+      // Priority 2: Height Descending (Taller items dictate layer height)
+      if (Math.abs(b.dim.h - a.dim.h) > 0.1) {
+          return b.dim.h - a.dim.h;
+      }
+      // Priority 3: Base Area Descending (Stable base)
+      return (b.dim.l * b.dim.w) - (a.dim.l * a.dim.w);
+  });
 
   const shipmentResults: PackingResult[] = [];
   let containerCount = 0;
@@ -449,16 +519,27 @@ export const calculateShipment = (
               const simGP = packSingleContainer(spec40GP, boxesToPack, containerCount);
               const simHQ = packSingleContainer(spec40HQ, boxesToPack, containerCount);
 
-              const hqEfficiencyAdvantage = (simGP.remainingBoxes.length - simHQ.remainingBoxes.length) / boxesToPack.length;
+              // Calculate Packing Gain (Count based, but could be Volume based)
+              const countGP = simGP.result.placedItems.length;
+              const countHQ = simHQ.result.placedItems.length;
+              
+              // Key Fix: Calculate advantage relative to what GP achieved, NOT total boxes in queue.
+              // If GP packs 100 items and HQ packs 110, advantage is 10%.
+              // Previously, if queue was 1000, we calculated 10/1000 = 1%, failing to recognize the gain.
+              const hqEfficiencyGain = countGP > 0 ? (countHQ - countGP) / countGP : 1.0;
+
+              // Check if HQ completes the entire remainder while GP fails
               const hqCompletesRemainder = simHQ.remainingBoxes.length === 0 && simGP.remainingBoxes.length > 0;
 
-              // Only use HQ if it captures significantly more cargo (>10% more) or completes the manifest
-              if (hqCompletesRemainder || hqEfficiencyAdvantage > 0.10) {
+              // Decision Threshold:
+              // 40HQ has ~13% more internal volume than 40GP.
+              // If we gain > 5% more cargo, it's usually worth the small price premium to reduce total container count.
+              if (hqCompletesRemainder || hqEfficiencyGain > 0.05) {
                   shipmentResults.push(simHQ.result);
                   boxesToPack = simHQ.remainingBoxes;
               } else {
                   shipmentResults.push(simGP.result);
-                  boxesToPack = simGP.remainingBoxes;
+                  boxesToPack = simGP.remainingBoxes; // Corrected: was using simGP which is correct, but let's be explicit
               }
           }
           

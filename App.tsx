@@ -205,21 +205,31 @@ export default function App() {
 
   const handleImportSubmit = () => {
     let data = extractCargoJSON(importText);
+    
+    // Fallback: Logic in extractCargoJSON generally covers most cases now (code blocks, raw array, deep search).
+    // But if it returns null, we can try a direct strict parsing one last time or detailed error feedback.
     if (!data) {
         try {
             data = JSON.parse(importText);
         } catch (e) {
-            alert("Failed to parse JSON.");
+            // Do not alert immediately, check if it might be an issue user can't see
+            console.error("JSON Import Parse Error:", e);
+            alert("Failed to parse JSON. Ensure it is a valid [Array] of objects.");
             return;
         }
     }
 
     if (data && Array.isArray(data)) {
         setPendingCargoUpdate(data);
-        setChatHistory(prev => [...prev, { role: 'model', text: "📝 I've prepared the cargo manifest from your import. Please review and apply it above." }]);
+        const successMsg: ChatMsg = { 
+            role: 'model', 
+            text: `📝 I've prepared the cargo manifest from your import (${data.length} items found). Please review and apply it above.` 
+        };
+        setChatHistory(prev => [...prev, successMsg]);
         setShowImportModal(false);
     } else {
-        alert("Invalid data format. Expected an array of cargo items.");
+        console.warn("Import data is not an array:", data);
+        alert("Invalid data format. Expected a JSON Array '[ ... ]'.");
     }
   };
 

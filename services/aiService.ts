@@ -96,6 +96,17 @@ export const extractCargoJSON = (text: string): any[] | null => {
       } catch (e) {}
   }
 
+  // 3. Deep Search Fallback: Find the first '[' and last ']'
+  const firstOpen = text.indexOf('[');
+  const lastClose = text.lastIndexOf(']');
+  if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+      const potentialJson = text.substring(firstOpen, lastClose + 1);
+      try {
+          const parsed = JSON.parse(potentialJson);
+          if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+  }
+
   return null;
 };
 
