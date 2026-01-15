@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Ship, BrainCircuit, RotateCcw, Send, ChevronLeft, ChevronRight, Layers, LayoutGrid, Sparkles, Box, Settings, Paperclip, X, Trash2, FastForward, PieChart, Copy, FileJson } from 'lucide-react';
+import { Ship, BrainCircuit, RotateCcw, Send, ChevronLeft, ChevronRight, Layers, LayoutGrid, Sparkles, Box, Settings, Paperclip, X, Trash2, FastForward, PieChart, Copy, FileJson, History, Plus } from 'lucide-react';
 import { CargoForm } from './components/CargoForm';
 import { Container3D } from './components/Container3D';
 import { CONTAINERS, MOCK_CARGO_COLORS } from './constants';
-import { CargoItem, PackingResult, ChatMsg, AIConfig, DEFAULT_AI_CONFIG } from './types';
+import { CargoItem, PackingResult, ChatMsg, AIConfig, DEFAULT_AI_CONFIG, ChatSession } from './types';
 import { calculateShipment } from './services/packer';
 import { AIService, extractCargoJSON, DATA_EXTRACTION_PROMPT, ADVISOR_PROMPT } from './services/aiService';
 
@@ -21,7 +21,14 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'single' | 'all'>('single');
   const [showAnimation, setShowAnimation] = useState(true);
   const [skipAnimation, setSkipAnimation] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string>('');
+
   const [aiConfig, setAiConfig] = useState<AIConfig>(DEFAULT_AI_CONFIG);
+
   const [showSettings, setShowSettings] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -31,6 +38,21 @@ export default function App() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+     // Auto-save session
+     if (currentSessionId && chatHistory.length > 0) {
+         setChatSessions(prev => {
+             const existing = prev.findIndex(s => s.id === currentSessionId);
+             if (existing >= 0) {
+                 const updated = [...prev];
+                 updated[existing] = { ...updated[existing], messages: chatHistory };
+                 return updated;
+             }
+             return prev;
+         });
+     }
+  }, [chatHistory, currentSessionId]);
 
   useEffect(() => {
     const savedConfig = localStorage.getItem('forklift_desirer_config');
@@ -177,34 +199,57 @@ export default function App() {
   };
 
   const handleManualImport = () => {
-      const input = prompt("Paste the JSON output from external LLM here:");
-      if (!input) return;
+      setImportText('');
+      setShowImportModal(true);
+  };
 
-      let data = extractCargoJSON(input);
-      if (!data) {
-          try {
-              data = JSON.parse(input);
-          } catch (e) {
-              alert("Failed to parse JSON.");
-              return;
-          }
+  const handleImportSubmit = () => {
+    let data = extractCargoJSON(importText);
+    if (!data) {
+        try {
+            data = JSON.parse(importText);
+        } catch (e) {
+            alert("Failed to parse JSON.");
+            return;
+        }
+    }
+
+    if (data && Array.isArray(data)) {
+        setPendingCargoUpdate(data);
+        setChatHistory(prev => [...prev, { role: 'model', text: "📝 I've prepared the cargo manifest from your import. Please review and apply it above." }]);
+        setShowImportModal(false);
+    } else {
+        alert("Invalid data format. Expected an array of cargo items.");
+    }
+  };
+
+  const handleNewChat = () => {
+      if (chatHistory.length > 0 && !currentSessionId) {
+          // Verify if we should save the previous untitled/unsaved one?
+          // For simplicity, just create a new session
+          const newId = Date.now().toString();
+          setChatSessions(prev => [...prev, { id: newId, title: `Session ${new Date().toLocaleString()}`, timestamp: Date.now(), messages: chatHistory }]);
       }
+      
+      const nextId = (Date.now() + 1).toString();
+      const newSession: ChatSession = { id: nextId, title: "New Conversation", timestamp: Date.now(), messages: [] };
+      setChatSessions(prev => [...prev, newSession]);
+      setCurrentSessionId(nextId);
+      setChatHistory([]);
+  };
 
-      if (data && Array.isArray(data)) {
-          const newItems: CargoItem[] = data.map((item: any, idx) => ({
-              id: Math.random().toString(36).substr(2, 9),
-              name: item.name || `Item ${idx+1}`,
-              quantity: Number(item.qty) || 1,
-              weight: Number(item.weight) || 10,
-              dimensions: { length: Number(item.l) || 100, width: Number(item.w) || 100, height: Number(item.h) || 100 },
-              unstackable: !!item.unstackable,
-              color: MOCK_CARGO_COLORS[idx % MOCK_CARGO_COLORS.length]
-          }));
-          setCargoItems(newItems);
-          setPendingCargoUpdate(null);
-          setChatHistory(prev => [...prev, { role: 'model', text: "✅ Manifest updated via manual import." }]);
-      } else {
-          alert("Invalid data format. Expected an array of cargo items.");
+  const handleLoadSession = (session: ChatSession) => {
+      setChatHistory(session.messages);
+      setCurrentSessionId(session.id);
+      setShowHistoryModal(false);
+  };
+
+  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setChatSessions(prev => prev.filter(s => s.id !== id));
+      if (currentSessionId === id) {
+          setCurrentSessionId('');
+          setChatHistory([]);
       }
   };
 
@@ -402,6 +447,13 @@ export default function App() {
                         <button onClick={handleManualImport} title="Import JSON Manifest" className="p-1.5 hover:bg-white/20 rounded-md transition-colors">
                             <FileJson className="w-4 h-4" />
                         </button>
+                        <div className="w-px h-4 bg-white/20 mx-1"></div>
+                        <button onClick={() => setShowHistoryModal(true)} title="History" className="p-1.5 hover:bg-white/20 rounded-md transition-colors">
+                            <History className="w-4 h-4" />
+                        </button>
+                        <button onClick={handleNewChat} title="New Chat" className="p-1.5 hover:bg-white/20 rounded-md transition-colors">
+                            <Plus className="w-4 h-4" />
+                        </button>
                     </div>
                 </div>
                 <div className="flex-1 p-3 overflow-y-auto space-y-3 bg-slate-50">
@@ -435,6 +487,68 @@ export default function App() {
             </div>
         </div>
       </main>
+
+      {/* Import Modal */}
+      {showImportModal && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4 animate-in fade-in zoom-in duration-200">
+                  <div className="flex justify-between items-center">
+                      <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                          <FileJson className="w-6 h-6 text-indigo-600" /> Import JSON Manifest
+                      </h2>
+                      <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
+                  </div>
+                  <p className="text-sm text-gray-500">Paste the JSON output obtained from an external LLM (e.g., ChatGPT, Claude) below.</p>
+                  <textarea 
+                    value={importText} 
+                    onChange={e => setImportText(e.target.value)} 
+                    placeholder='[ { "name": "Box A", "qty": 10 ... } ]'
+                    className="w-full h-48 p-3 border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  <div className="flex justify-end gap-2">
+                      <button onClick={() => setShowImportModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Cancel</button>
+                      <button onClick={handleImportSubmit} className="px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg text-sm font-medium flex items-center gap-2">
+                          <Layers className="w-4 h-4" /> Parse & Update
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* History Modal */}
+      {showHistoryModal && (
+          <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4 animate-in fade-in zoom-in duration-200 max-h-[80vh] flex flex-col">
+                  <div className="flex justify-between items-center">
+                      <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                          <History className="w-6 h-6 text-indigo-600" /> Chat History
+                      </h2>
+                      <button onClick={() => setShowHistoryModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+                      {chatSessions.length === 0 ? (
+                          <div className="text-center text-gray-400 py-10">No history available</div>
+                      ) : (
+                          chatSessions.sort((a,b) => b.timestamp - a.timestamp).map(session => (
+                              <button 
+                                key={session.id} 
+                                onClick={() => handleLoadSession(session)}
+                                className={`w-full text-left p-3 rounded-lg border transition-all flex justify-between items-center group ${currentSessionId === session.id ? 'bg-indigo-50 border-indigo-200' : 'hover:bg-gray-50 border-gray-100'}`}
+                              >
+                                  <div>
+                                      <div className="font-medium text-sm text-gray-800">{session.title}</div>
+                                      <div className="text-xs text-gray-400">{new Date(session.timestamp).toLocaleString()} • {session.messages.length} msgs</div>
+                                  </div>
+                                  <div onClick={(e) => handleDeleteSession(session.id, e)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all">
+                                      <Trash2 className="w-4 h-4" />
+                                  </div>
+                              </button>
+                          ))
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }

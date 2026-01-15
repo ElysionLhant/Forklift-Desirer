@@ -74,3 +74,10 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   baseUrl: 'http://localhost:11434',
   modelName: 'llama3',
 };
+
+export interface ChatSession {
+    id: string;
+    title: string;
+    timestamp: number;
+    messages: ChatMsg[];
+}
