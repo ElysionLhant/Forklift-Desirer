@@ -168,47 +168,32 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         if (!dragState.active) return;
         e.stopPropagation();
 
-        let intersectionPoint = new THREE.Vector3();
-        let hit = false;
-
-        // 1. Raycast against the scene to find "Ground Truth" (Floor or Other Boxes)
-        // We use the event's ray and intersect against scene children, ignoring dragged items.
-        // NOTE: e.intersections contains objects sorted by distance.
-        if (e.intersections && e.intersections.length > 0) {
-             for (const intersection of e.intersections) {
-                 // Skip if object is flagged as dragged or is a helper
-                 if (intersection.object.userData?.isDragging) continue;
-                 // Skip if it's not a mesh we care about (e.g. not visible)
-                 if (!intersection.object.visible) continue;
-                 
-                 // Found valid surface (could be another box or the floor plane)
-                 intersectionPoint.copy(intersection.point);
-                 hit = true;
-                 break;
-             }
-        }
-
-        // 2. Fallback: If no valid hit (e.g. pointing at sky), use Plane Intersection at start height
-        if (!hit) {
-            const planeY = dragState.startPoint.y;
-            const raycaster = e.ray; 
-            const t = (planeY - raycaster.origin.y) / raycaster.direction.y;
-            if (isFinite(t)) {
-                intersectionPoint.copy(raycaster.origin).add(raycaster.direction.multiplyScalar(t));
-            } else {
-                return; // Should not happen unless parallel
-            }
-        }
+        // Calculate delta
+        // We project ray to a horizontal plane passing through the startPoint's Y
+        // Actually, e.point is on the object surface if checking collisions, but if we drag it,
+        // we might lose the object?
+        // Using `e.ray` from `useThree` manually is better, but `onPointerMove` gives us raycast events.
+        // If we captured pointer, `e` continues giving events.
         
-        // 3. Calculate Delta
-        // We use the X/Z difference from start. 
-        // Note: startPoint was the hit point on the object at start.
-        // intersectionPoint is the current hit point on whatever surface.
-        // By using delta = intersect - start, we move the object by that amount.
-        const deltaX = intersectionPoint.x - dragState.startPoint.x;
-        const deltaZ = intersectionPoint.z - dragState.startPoint.z;
-
+        // Simpler way: Calculate intersection with a plane at h = startPoint.y
+        const planeY = dragState.startPoint.y;
+        const raycaster = e.ray; // Ray from camera
+        
+        // Ray Plane Intersection:
+        // P = O + tD
+        // P.y = planeY => O.y + t*D.y = planeY => t = (planeY - O.y) / D.y
+        const t = (planeY - raycaster.origin.y) / raycaster.direction.y;
+        if (!isFinite(t)) return; // Parallel to plane
+        
+        const intersection = new THREE.Vector3().copy(raycaster.origin).add(raycaster.direction.multiplyScalar(t));
+        
+        const deltaX = intersection.x - dragState.startPoint.x;
+        const deltaZ = intersection.z - dragState.startPoint.z;
         // Convert to Local Space delta (cm)
+        // Global = Local * SCALE + Offset
+        // Local = (Global - Offset) / SCALE
+        // DeltaGlobal = DeltaLocal * SCALE => DeltaLocal = DeltaGlobal / SCALE
+
         let dLocalX = deltaX / SCALE;
         let dLocalZ = deltaZ / SCALE;
 
@@ -264,30 +249,12 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
             const newMap = new Map(prev);
             const items = newMap.get(dragState.containerIndex)?.map(it => ({...it})) || [];
             
-            // Calculate new Y based on intersection (Real-time stacking feedback)
-            // intersectionPoint is global world coordinate of the surface we hit.
-            // We want item bottom to align with this surface.
-            // visual logic: Mesh Y = (item.y * SCALE + FLOOR_HEIGHT + offset.y) + h/2
-            // So: SurfaceY = item.y * SCALE + FLOOR_HEIGHT + offset.y
-            // => item.y = (SurfaceY - FLOOR_HEIGHT - offset.y) / SCALE
-            
-            // Note: If we hit a wall or weird angle, Y might be huge. Clamp?
-            // Usually we hit floor (Y ~ offset.y + FLOOR_HEIGHT) => item.y ~ 0.
-            // Or we hit box top.
-            
-            let targetY = 0;
-            if (layoutEntry) {
-                 const surfaceY = intersectionPoint.y;
-                 const calculatedY = (surfaceY - FLOOR_HEIGHT - layoutEntry.offset.y) / SCALE;
-                 targetY = Math.max(0, calculatedY);
-            }
-
             items.forEach(it => {
                 if (dragState.initialPositions.has(it.id)) {
                     const init = dragState.initialPositions.get(it.id)!;
                     it.position.x = init.x + dLocalX;
                     it.position.z = init.z + dLocalZ;
-                    it.position.y = targetY; // Update Y for visual feedback
+                    // Y stays same during drag
                 }
             });
             
@@ -339,14 +306,11 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
                     const oMinZ = other.position.z;
                     const oMaxZ = other.position.z + other.dimensions.width;
 
-                    // Base Area Overlap Test
-                    // We calculate the intersection area. If it's significant (> 0.1 cm²), we assume support.
-                    // This creates a reliable stacking behavior for inner-snaps while rejecting side-snaps (area=0).
-                    const overlapX = Math.max(0, Math.min(iMaxX, oMaxX) - Math.max(iMinX, oMinX));
-                    const overlapZ = Math.max(0, Math.min(iMaxZ, oMaxZ) - Math.max(iMinZ, oMinZ));
-                    const overlapArea = overlapX * overlapZ;
+                    // AABB Intersection Test
+                    const intersect = (iMinX < oMaxX && iMaxX > oMinX && 
+                                       iMinZ < oMaxZ && iMaxZ > oMinZ);
                                        
-                    if (overlapArea > 0.1) {
+                    if (intersect) {
                         const topH = other.position.y + other.dimensions.height;
                         if (topH > maxSupportH) maxSupportH = topH;
                     }
@@ -391,14 +355,6 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
-        // Fallback: If drag is active but R3F event missed (mouse off object), assume drop here.
-        if (dragState.active) {
-             applyGravity(dragState.containerIndex, new Set(dragState.initialPositions.keys()));
-             setDragState(prev => ({ ...prev, active: false }));
-             isBoxDraggingRef.current = false;
-             if (orbitControlsRef.current) orbitControlsRef.current.enabled = true;
-        }
-
         if (e.button === 0) {
             // Clean up selection box
             setSelectionBox(null);
@@ -490,7 +446,6 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
                                             offset={offset}
                                             skipAnimation={true}
                                             isSelected={selectedIds.has(item.id)}
-                                            isDragging={dragState.active && dragState.initialPositions.has(item.id)}
                                         />
                                     </group>
                                 ))}
