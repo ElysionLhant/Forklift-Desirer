@@ -185,50 +185,106 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         let dLocalX = deltaX / SCALE;
         let dLocalZ = deltaZ / SCALE;
 
-        // Snapping logic
-        const layoutEntry = layout.find(l => l.index === dragState.containerIndex);
-        if (layoutEntry) {
-            const spec = CONTAINERS.find(c => c.type === layoutEntry.result.containerType) || CONTAINERS[0];
-            const items = itemsMap.get(dragState.containerIndex) || [];
-            const stationary = items.filter(it => !dragState.initialPositions.has(it.id));
+        // Snapping logic (GLOBAL WORLD SPACE)
+        const snapWorldX: number[] = [];
+        const snapWorldZ: number[] = [];
 
-            // Candidate snap lines
-            const snapX = [0, spec.dimensions.length];
-            const snapZ = [0, spec.dimensions.width];
-            stationary.forEach(s => {
-                snapX.push(s.position.x, s.position.x + s.dimensions.length);
-                snapZ.push(s.position.z, s.position.z + s.dimensions.width);
+        // Collect all global snap lines
+        layout.forEach(({ result, offset, index }) => {
+            const cSpec = CONTAINERS.find(c => c.type === result.containerType) || CONTAINERS[0];
+            
+            // World Walls
+            const W = cSpec.dimensions.width * SCALE;
+            const L = cSpec.dimensions.length * SCALE;
+            
+            snapWorldX.push(offset.x, offset.x + L);
+            snapWorldZ.push(offset.z, offset.z + W);
+
+            // World Items (Stationary)
+            const contItems = itemsMap.get(index) || [];
+            contItems.forEach(it => {
+                 if (index === dragState.containerIndex && dragState.initialPositions.has(it.id)) return; // Skip dragged
+
+                 const iL = it.dimensions.length * SCALE;
+                 const iW = it.dimensions.width * SCALE;
+                 
+                 const wX = (it.position.x * SCALE) + offset.x;
+                 const wZ = (it.position.z * SCALE) + offset.z;
+
+                 snapWorldX.push(wX, wX + iL);
+                 snapWorldZ.push(wZ, wZ + iW);
             });
+        });
 
-            let minDX = SNAP_THRESHOLD;
-            let adjustX = 0;
-            let minDZ = SNAP_THRESHOLD;
-            let adjustZ = 0;
+        // Calculate Adjustment in World Space
+        const curLayout = layout.find(l => l.index === dragState.containerIndex);
+        if (curLayout) {
+            let minDX = SNAP_THRESHOLD * SCALE; // Threshold in World Units? 
+            // SNAP_THRESHOLD is 5 cm. World Units = cm * SCALE.
+            // If SCALE is usually small (e.g. 0.02), then 5*0.02 = 0.1 WU.
+            // Just use scaled threshold.
+            let worldThreshold = SNAP_THRESHOLD * SCALE; 
+            
+            let adjustWorldX = 0;
+            let adjustWorldZ = 0;
+            
+            const curOffX = curLayout.offset.x;
+            const curOffZ = curLayout.offset.z;
+
+            // Check all dragged items against global lines
+            const currentContainerItems = itemsMap.get(dragState.containerIndex) || [];
 
             for (const [id, init] of dragState.initialPositions.entries()) {
-                const item = items.find(i => i.id === id);
+                const item = currentContainerItems.find(i => i.id === id);
                 if (!item) continue;
                 
-                const curXMin = init.x + dLocalX;
-                const curXMax = curXMin + item.dimensions.length;
-                const curZMin = init.z + dLocalZ;
-                const curZMax = curZMin + item.dimensions.width;
+                const iL = item.dimensions.length * SCALE;
+                const iW = item.dimensions.width * SCALE;
 
-                for (const sx of snapX) {
-                    const d1 = sx - curXMin;
-                    if (Math.abs(d1) < minDX) { minDX = Math.abs(d1); adjustX = d1; }
-                    const d2 = sx - curXMax;
-                    if (Math.abs(d2) < minDX) { minDX = Math.abs(d2); adjustX = d2; }
+                // Current World Position of this dragged item
+                // Local = Init + dLocal
+                // World = Local * SCALE + Offset
+                const curWorldMinX = ((init.x + dLocalX) * SCALE) + curOffX;
+                const curWorldMaxX = curWorldMinX + iL;
+                const curWorldMinZ = ((init.z + dLocalZ) * SCALE) + curOffZ;
+                const curWorldMaxZ = curWorldMinZ + iW;
+
+                // Check X Snaps
+                for (const sx of snapWorldX) {
+                    const d1 = sx - curWorldMinX;
+                    if (Math.abs(d1) < worldThreshold) { worldThreshold = Math.abs(d1); adjustWorldX = d1; }
+                    
+                    // We need to check if the accumulated adjustment is better.
+                    // Actually standard way is: find closest snap for THIS edge. verify if it beats GLOBAL best.
+                    // But we have 2 edges per item, N items.
+                    // Simplified: just update global best if this specific deviation is smaller.
+                    
+                    const d2 = sx - curWorldMaxX;
+                    if (Math.abs(d2) < worldThreshold) { worldThreshold = Math.abs(d2); adjustWorldX = d2; }
                 }
-                for (const sz of snapZ) {
-                    const d1 = sz - curZMin;
-                    if (Math.abs(d1) < minDZ) { minDZ = Math.abs(d1); adjustZ = d1; }
-                    const d2 = sz - curZMax;
-                    if (Math.abs(d2) < minDZ) { minDZ = Math.abs(d2); adjustZ = d2; }
+
+                // Reset threshold for Z check separately? No, separate X and Z logic.
+            }
+            // Re-run for Z with fresh threshold
+            worldThreshold = SNAP_THRESHOLD * SCALE;
+            for (const [id, init] of dragState.initialPositions.entries()) {
+                const item = currentContainerItems.find(i => i.id === id);
+                if (!item) continue;
+                const iW = item.dimensions.width * SCALE;
+                const curWorldMinZ = ((init.z + dLocalZ) * SCALE) + curOffZ;
+                const curWorldMaxZ = curWorldMinZ + iW;
+
+                for (const sz of snapWorldZ) {
+                    const d1 = sz - curWorldMinZ;
+                    if (Math.abs(d1) < worldThreshold) { worldThreshold = Math.abs(d1); adjustWorldZ = d1; }
+                    const d2 = sz - curWorldMaxZ;
+                    if (Math.abs(d2) < worldThreshold) { worldThreshold = Math.abs(d2); adjustWorldZ = d2; }
                 }
             }
-            dLocalX += adjustX;
-            dLocalZ += adjustZ;
+
+            // Apply adjustment back to dLocal
+            dLocalX += (adjustWorldX / SCALE);
+            dLocalZ += (adjustWorldZ / SCALE);
         }
 
         // Update items with Physics (Climbing) using World Space to allow Inter-Container interaction
