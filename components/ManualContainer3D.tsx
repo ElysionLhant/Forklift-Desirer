@@ -21,11 +21,18 @@ interface DragState {
 }
 
 const HoverTooltip: React.FC<{
-    result: PackingResult;
+    result: PackingResult; // Used for containerType and volume capacity
+    liveItems: PlacedItem[]; // Real-time items
     index: number;
     visible: boolean;
-}> = ({ result, index, visible }) => {
+}> = ({ result, liveItems, index, visible }) => {
     if (!visible) return null;
+
+    // Calculate real-time stats
+    const totalItems = liveItems.length;
+    const usedVolume = liveItems.reduce((acc, item) => acc + (item.dimensions.length * item.dimensions.width * item.dimensions.height), 0) / 1000000;
+    const totalWeight = liveItems.reduce((acc, item) => acc + item.weight, 0);
+    const volumeUtilization = (usedVolume / result.totalVolume) * 100;
 
     return (
         <div className="bg-white/95 backdrop-blur-sm p-4 rounded-lg shadow-xl border border-gray-200 min-w-[240px] pointer-events-none select-none text-left">
@@ -35,22 +42,22 @@ const HoverTooltip: React.FC<{
             <div className="space-y-1.5 text-xs text-gray-600">
                <div className="grid grid-cols-2 gap-x-4">
                    <span className="text-gray-400">Total Items:</span>
-                   <span className="font-medium text-gray-800 text-right">{result.placedItems.length}</span>
+                   <span className="font-medium text-gray-800 text-right">{totalItems}</span>
                </div>
                <div className="grid grid-cols-2 gap-x-4">
                    <span className="text-gray-400">Volume:</span>
-                   <span className="font-medium text-gray-800 text-right">{result.usedVolume.toFixed(2)} m³</span>
+                   <span className="font-medium text-gray-800 text-right">{usedVolume.toFixed(2)} m³</span>
                </div>
                <div className="grid grid-cols-2 gap-x-4">
                    <span className="text-gray-400">Weight:</span>
-                   <span className="font-medium text-gray-800 text-right">{result.totalWeight} kg</span>
+                   <span className="font-medium text-gray-800 text-right">{totalWeight} kg</span>
                </div>
             </div>
             
             <div className="mt-3 pt-2 border-t border-gray-100">
                 <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">Manifest</p>
                 <div className="max-h-[100px] overflow-hidden relative">
-                    {Object.entries(result.placedItems.reduce((acc, item) => {
+                    {Object.entries(liveItems.reduce((acc, item) => {
                         acc[item.name] = (acc[item.name] || 0) + 1;
                         return acc;
                     }, {} as Record<string, number>)).slice(0, 5).map(([name, count]) => (
@@ -59,7 +66,7 @@ const HoverTooltip: React.FC<{
                             <span className="font-medium text-gray-700">x{count}</span>
                         </div>
                     ))}
-                    {Object.keys(result.placedItems.reduce((acc, item) => {
+                    {Object.keys(liveItems.reduce((acc, item) => {
                          acc[item.name] = (acc[item.name] || 0) + 1;
                          return acc;
                     }, {} as Record<string, number>)).length > 5 && (
@@ -99,6 +106,45 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     
     // Map container index to its items (modifiable state)
     const [itemsMap, setItemsMap] = useState<Map<number, PlacedItem[]>>(new Map());
+
+    // Derived state: Iterate all items to see which Container bounds they fall into.
+    const derivedContents = React.useMemo(() => {
+        const contents = new Map<number, PlacedItem[]>();
+        // Initialize arrays
+        layout.forEach(l => contents.set(l.index, []));
+
+        // Iterate all items in the world
+        itemsMap.forEach((items, originIndex) => {
+            const originLayout = layout.find(l => l.index === originIndex);
+            if (!originLayout) return;
+
+            items.forEach(item => {
+                // Calculate item center in World Space
+                const l = item.dimensions.length * SCALE;
+                const w = item.dimensions.width * SCALE;
+                
+                // Position is top-left corner locally. World Center:
+                const itemWorldX = (item.position.x * SCALE) + originLayout.offset.x + (l/2);
+                const itemWorldZ = (item.position.z * SCALE) + originLayout.offset.z + (w/2);
+
+                // Check which container bounds this center point falls into
+                for (const { result, offset, index } of layout) {
+                    const cSpec = CONTAINERS.find(c => c.type === result.containerType) || CONTAINERS[0];
+                    const cL = cSpec.dimensions.length * SCALE;
+                    const cW = cSpec.dimensions.width * SCALE;
+                    
+                    if (
+                        itemWorldX >= offset.x && itemWorldX <= offset.x + cL &&
+                        itemWorldZ >= offset.z && itemWorldZ <= offset.z + cW
+                    ) {
+                        contents.get(index)?.push(item);
+                        break;
+                    }
+                }
+            });
+        });
+        return contents;
+    }, [itemsMap, layout]);
     
     // Tooltip State
     const [hoveredContainer, setHoveredContainer] = useState<number | null>(null);
@@ -112,15 +158,23 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
                 const entry = layout.find(l => l.index === tooltipVisibleIndex);
                 if (entry) {
                     const r = entry.result;
-                    const summary = Object.entries(r.placedItems.reduce((acc, item) => {
+                    const liveItems = derivedContents.get(tooltipVisibleIndex) || [];
+
+                    // Calculate real-time stats
+                    const totalItems = liveItems.length;
+                    const usedVolume = liveItems.reduce((acc, item) => acc + (item.dimensions.length * item.dimensions.width * item.dimensions.height), 0) / 1000000;
+                    const totalWeight = liveItems.reduce((acc, item) => acc + item.weight, 0);
+                    const volumeUtilization = (usedVolume / r.totalVolume) * 100;
+
+                    const summary = Object.entries(liveItems.reduce((acc, item) => {
                         acc[item.name] = (acc[item.name] || 0) + 1;
                         return acc;
-                    }, {} as Record<string, number>)).map(([n, c]) => `- ${n}: x${c}`).join('\n'); // was \n
+                    }, {} as Record<string, number>)).map(([n, c]) => `- ${n}: x${c}`).join('\n');
 
                     const text = `Container: ${r.containerType} #${tooltipVisibleIndex + 1}\n` +
-                                 `Total Items: ${r.placedItems.length}\n` +
-                                 `Volume: ${r.usedVolume.toFixed(2)} m3 / ${r.totalVolume} m3 (${r.volumeUtilization.toFixed(1)}%)\n` +
-                                 `Weight: ${r.totalWeight} kg\n\n` +
+                                 `Total Items: ${totalItems}\n` +
+                                 `Volume: ${usedVolume.toFixed(2)} m3 / ${r.totalVolume} m3 (${volumeUtilization.toFixed(1)}%)\n` +
+                                 `Weight: ${totalWeight} kg\n\n` +
                                  `Manifest:\n${summary}`;
                     navigator.clipboard.writeText(text);
                 }
@@ -128,7 +182,7 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [tooltipVisibleIndex, layout]);
+    }, [tooltipVisibleIndex, layout, derivedContents]);
 
     // Drag State
     const [dragState, setDragState] = useState<DragState>({ active: false, startPoint: new THREE.Vector3(), initialPositions: new Map(), containerIndex: -1 });
@@ -622,7 +676,7 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
                                     {/* Tooltip Anchor */}
                                     {tooltipVisibleIndex === index && (
                                         <Html position={[offset.x + l/2, offset.y + h + 0.5, offset.z + w/2]} center style={{ pointerEvents: 'none' }}>
-                                            <HoverTooltip result={result} index={index} visible={true} />
+                                            <HoverTooltip result={result} liveItems={derivedContents.get(index) || []} index={index} visible={true} />
                                         </Html>
                                     )}
 
