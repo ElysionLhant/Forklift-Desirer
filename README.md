@@ -19,15 +19,19 @@ To ensure generated loading plans are 100% executable in terminals and warehouse
 *   **Constraints**: The algorithm simulates a standard 1.1m wide forklift collision volume but introduces **50cm Side Shift capability** and minimal **2cm Wall Buffer**. This allows the system to achieve high-density loading ("Squeezing boxes in") without violating physical laws.
 *   **Optimization**: v0.1.0 introduces a **Spatial Grid** collision detection system, enabling instant calculations (O(N) performance) even with 2000+ objects.
 
-### 2. Cargo Group Affinity
+### 2. Custom Container Plan
+*   **Feature**: You can modify the number of containers calculated by the algorithm.
+*   **Warning System**: When you reduce the container count, the system will automatically calculate which cargoes are left out and display an **Insufficient Capacity** warning below the list, detailing the unpacked items.
+
+### 3. Cargo Group Affinity
 *   **Logic**: For easier securing (e.g., triangular chocks) and unloading, same-type cargo should stay grouped rather than scattered.
 *   **Constraints**: The packing algorithm includes a "Loose Adhesion" mechanism—strict adhesion at the base, with relaxed mixed stacking at upper levels to balance stability and fill rate.
 
-### 3. Physical Access Path & Obstacles
+### 4. Physical Access Path & Obstacles
 *   **Logic**: Cargo must be transportable from the container door to its target position without obstruction.
 *   **Constraints**: The system calculates the sweep path of the forklift chassis and tines in real-time. If a path is blocked by previously placed cargo, the position is deemed unreachable.
 
-### 4. Sequential Operation & Visualization
+### 5. Sequential Operation & Visualization
 *   **Logic**: Simulates the continuous operation of a single forklift.
 *   **Visualization**: Full 3D animation showing the process from entry, lifting, side-shifting, placement, to exit, including fork raising maneuvers to clear lower cargo.
 

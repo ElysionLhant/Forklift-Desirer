@@ -17,6 +17,8 @@ export default function App() {
   const [customPlan, setCustomPlan] = useState<string[]>([]);
   const [shipmentResults, setShipmentResults] = useState<PackingResult[]>([]);
   const [strategySummaries, setStrategySummaries] = useState<Record<string, { count: number; desc: string }>>({});
+  const [cachedResults, setCachedResults] = useState<Record<string, PackingResult[]>>({});
+  const [manualContainerCounts, setManualContainerCounts] = useState<Record<string, number>>({});
   const [currentContainerIndex, setCurrentContainerIndex] = useState(0);
   const [viewMode, setViewMode] = useState<'single' | 'all'>('single');
   const [showAnimation, setShowAnimation] = useState(true);
@@ -101,47 +103,36 @@ export default function App() {
 
         try {
             const summaries: Record<string, { count: number; desc: string }> = {};
-            const resultsCache: Record<string, PackingResult[]> = {};
+            const resultsMap: Record<string, PackingResult[]> = {};
 
             // 1. Calculate Smart Mix
             setPackingProgress('Optimizing Mix Strategy...');
             const mixRes = await calculateShipmentAsync('SMART_MIX', cargoItems, (msg) => setPackingProgress(`[Smart Mix] ${msg}`));
-            resultsCache['SMART_MIX'] = mixRes;
+            resultsMap['SMART_MIX'] = mixRes;
 
             const mixCounts = mixRes.reduce((acc, curr) => { acc[curr.containerType] = (acc[curr.containerType] || 0) + 1; return acc; }, {} as Record<string, number>);
             const mixDesc = Object.entries(mixCounts).map(([t, c]) => `${c}x${t}`).join(', ');
             summaries['SMART_MIX'] = { count: mixRes.length, desc: mixDesc || "None" };
+            
+            // Initialize Manual Counts from Smart Mix
+            setManualContainerCounts(mixCounts);
 
             // 2. Calculate Individual Container Options
             for (const c of CONTAINERS) {
                 setPackingProgress(`Analyzing ${c.type} Option...`);
-                // We use a small delay to ensure UI updates between heavy tasks
                 await new Promise(r => setTimeout(r, 0)); 
                 const res = await calculateShipmentAsync(c, cargoItems, (msg) => setPackingProgress(`[${c.type}] ${msg}`));
-                resultsCache[c.type] = res;
+                resultsMap[c.type] = res;
                 summaries[c.type] = { count: res.length, desc: `${res.length}x ${c.type}` };
             }
 
             setStrategySummaries(summaries);
+            setCachedResults(resultsMap);
+            // setManualContainerCounts({}); // REMOVED: We don't want to reset overrides, we set them from mix above
 
-            // 3. Determine Active Results based on Mode
-            let activeRes: PackingResult[] = [];
-            if (strategyMode === 'SMART_MIX') {
-                activeRes = resultsCache['SMART_MIX'];
-            } else if (strategyMode === 'SINGLE') {
-                activeRes = resultsCache[singleStrategyType] || [];
-            } else if (strategyMode === 'CUSTOM_PLAN') {
-                if (customPlan.length > 0) {
-                    setPackingProgress('Applying Custom Plan...');
-                    const planSpecs = customPlan.map(type => CONTAINERS.find(c => c.type === type)!);
-                    activeRes = await calculateShipmentAsync(planSpecs, cargoItems, (msg) => setPackingProgress(`[Plan] ${msg}`));
-                }
-            }
-            
-            setShipmentResults(activeRes);
-            setCurrentContainerIndex(0);
-            if (activeRes.length <= 1) setViewMode('single');
-            handleRestartAnimation();
+            // Custom Plan Logic - handled separately or via generic calculation if needed
+            // For now, simpler to just let the standard strategies populate
+
         } catch (error) {
             console.error("Packing failed:", error);
             setPackingProgress('Error: ' + (error instanceof Error ? error.message : String(error)));
@@ -151,7 +142,76 @@ export default function App() {
     };
 
     runPacking();
-  }, [cargoItems, strategyMode, singleStrategyType, customPlan]);
+  }, [cargoItems]); // Only re-run when cargo changes
+
+  // Effect to apply strategy selection and manual counts
+  useEffect(() => {
+    const applyStrategy = async () => {
+        let activeRes: PackingResult[] = [];
+        
+        if (strategyMode === 'SMART_MIX') {
+            activeRes = cachedResults['SMART_MIX'] || [];
+        } else if (strategyMode === 'SINGLE') {
+           // Previous behavior: slicing result. But now "Uniform Containers" is used for custom mix editing.
+           // However, button click triggers this mode.
+           // If user clicks "20GP" button, they might expect to see the mix.
+           // Let's defer to the manualContainerCounts which are initialized with Smart Mix.
+           // If user clicks, we can set mode to CUSTOM_PLAN implicitly?
+           // The previous code allows selecting "Single Strategy".
+        } else if (strategyMode === 'CUSTOM_PLAN') {
+             // Logic handled by separate effect below
+        }
+
+        if (strategyMode !== 'CUSTOM_PLAN') {
+            setShipmentResults(activeRes);
+            setCurrentContainerIndex(0);
+            handleRestartAnimation();
+        }
+    };
+    applyStrategy();
+  }, [strategyMode, singleStrategyType, cachedResults]);
+
+  // Separate effect for Custom Plan calculation (Triggered by manual edits)
+  useEffect(() => {
+     if (strategyMode === 'CUSTOM_PLAN') {
+         const runCustom = async () => {
+             // Construct plan from manualContainerCounts
+             const plan: string[] = [];
+             Object.entries(manualContainerCounts).forEach(([type, count]) => {
+                 for(let i=0; i<count; i++) plan.push(type);
+             });
+             
+             if (plan.length === 0) {
+                 setShipmentResults([]);
+                 return;
+             }
+
+             setIsPacking(true);
+             try {
+                // Find specs
+                const planSpecs: any[] = [];
+                // Sort to match typical loading order (or just append)
+                // Let's sort to keep consistent: 40HQ -> 40GP -> 20GP ? Or as defined in list.
+                // If we iterate manualContainerCounts, order depends on object keys?
+                // Let's iterate CONTAINERS to be sure.
+                CONTAINERS.forEach(c => {
+                    const count = manualContainerCounts[c.type] || 0;
+                    for(let i=0; i<count; i++) planSpecs.push(c);
+                });
+
+                const res = await calculateShipmentAsync(planSpecs, cargoItems, () => {});
+                setShipmentResults(res);
+                setCurrentContainerIndex(0);
+                handleRestartAnimation();
+             } catch(e) { console.error(e); }
+             finally { setIsPacking(false); }
+         };
+         
+         // Debounce?
+         const timer = setTimeout(runCustom, 500);
+         return () => clearTimeout(timer);
+     }
+  }, [strategyMode, manualContainerCounts, cargoItems]);
 
   const handleRestartAnimation = () => {
       setSkipAnimation(false);
@@ -459,12 +519,98 @@ export default function App() {
                     </button>
                     <div className="pt-2 border-t border-gray-100">
                         <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Uniform Containers</div>
-                        {CONTAINERS.map(c => (
-                            <button key={c.type} onClick={() => { setStrategyMode('SINGLE'); setSingleStrategyType(c.type); }} className={`w-full flex items-center justify-between p-2 mb-1 rounded text-xs transition-colors ${strategyMode === 'SINGLE' && singleStrategyType === c.type ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                                <span className="flex items-center gap-2"><Box className="w-3 h-3" /> {c.type}</span>
-                                <div className="bg-gray-100 px-1.5 rounded text-[10px] text-gray-500 inline-block">x{strategySummaries[c.type]?.count || 0}</div>
-                            </button>
-                        ))}
+                        {CONTAINERS.map(c => {
+                            // Logic: In CUSTOM_PLAN mode, we are editing.
+                            // In SMART_MIX mode, we show the mix counts.
+                            // In SINGLE mode, we previously showed "all 20GP", but user wants mix counts.
+                            // So let's always show manualContainerCounts (which is init from Mix).
+                            
+                            const manualCount = manualContainerCounts[c.type] || 0;
+                            const isSelected = (strategyMode === 'SINGLE' && singleStrategyType === c.type) || (strategyMode === 'CUSTOM_PLAN' && manualCount > 0);
+
+                            // Warning Logic: missing items
+                            // Compare current result Total Cargo vs Input Cargo
+                            let missingEntries: [string, number][] = [];
+                            if (isSelected && shipmentResults.length > 0) {
+                                // If last container has "unplacedItems", that's it.
+                                // calculateShipmentAsync usually puts unplaced items in the last container result entry.
+                                const lastRes = shipmentResults[shipmentResults.length - 1];
+                                if (lastRes.unplacedItems && lastRes.unplacedItems.length > 0) {
+                                     // Only show warning if THIS container type is relevant? 
+                                     // Actually warning should probably be global or on the row being edited.
+                                     // Let's show it on the row if it's the one being reduced, or simply on all rows?
+                                     // Showing on all might be cluttered. Let's show on the "Uniform Containers" block or simply under the list.
+                                     // But the requirement says "below" (probably below the input).
+                                     // Let's attach it to the container type row if that type has > 0 count? Or just show on the active one.
+                                     
+                                     const missing: Record<string, number> = {};
+                                     lastRes.unplacedItems.forEach(item => {
+                                         missing[item.name] = (missing[item.name] || 0) + item.quantity;
+                                     });
+                                     if (Object.keys(missing).length > 0) missingEntries = Object.entries(missing);
+                                }
+                            }
+
+                            return (
+                                <div key={c.type} className="mb-1">
+                                    <div 
+                                      className={`w-full flex items-center justify-between p-2 rounded text-xs transition-colors ${isSelected ? 'bg-indigo-50 border border-indigo-200' : 'text-gray-600 hover:bg-gray-100'}`}
+                                      onClick={() => {
+                                          // If user clicks row, switch to CUSTOM_PLAN if not already?
+                                          // Or maybe just highlight it?
+                                          // Setting strategyMode='SINGLE' clears result? No, I stopped using logic for SINGLE.
+                                          // Let's just set CUSTOM_PLAN mode to be safe, so it uses the input values.
+                                          if (strategyMode !== 'CUSTOM_PLAN') setStrategyMode('CUSTOM_PLAN');
+                                      }}
+                                    >
+                                        <span className={`flex items-center gap-2 ${isSelected ? 'text-indigo-700 font-bold' : ''}`}><Box className="w-3 h-3" /> {c.type}</span>
+                                        <div 
+                                            className="flex items-center bg-gray-100 rounded px-1 border border-transparent hover:border-gray-300 transition-colors"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <span className="text-[10px] text-gray-400 mr-1 select-none">x</span>
+                                            <input 
+                                                type="number"
+                                                min="0"
+                                                className="w-8 bg-transparent text-[10px] font-medium text-gray-700 outline-none text-center p-0"
+                                                value={manualCount}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value);
+                                                    const newVal = isNaN(val) || val < 0 ? 0 : val;
+                                                    setManualContainerCounts(prev => ({ ...prev, [c.type]: newVal }));
+                                                    setStrategyMode('CUSTOM_PLAN');
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Show warning only once? Or for each row? 
+                                        If we have missing items, it applies to the whole plan. 
+                                        Let's show it only if this container type is PART of the plan, to avoid duplication?
+                                        Or better: Show it under the LAST item in the list. But inside map is tricky.
+                                        Let's show under Current Row if it has focus? No focus tracking.
+                                        Show if (isSelected). */
+                                    }
+                                    {missingEntries.length > 0 && c.type === CONTAINERS[CONTAINERS.length-1].type && (
+                                        <div className="mt-1 mx-2 p-2 bg-red-50 border border-red-100 rounded text-[10px] text-red-600 animate-in fade-in slide-in-from-top-1 w-full relative z-20 shadow-sm">
+                                            <div className="font-bold mb-1 flex items-center gap-1">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                                                Insufficient Capacity
+                                            </div>
+                                            <p className="mb-1 leading-tight opacity-80">Unpacked items:</p>
+                                            <div className="space-y-0.5 max-h-20 overflow-y-auto custom-scrollbar">
+                                                {missingEntries.map(([name, count]) => (
+                                                    <div key={name} className="flex justify-between">
+                                                        <span className="truncate pr-2 w-24">{name}</span>
+                                                        <span className="font-mono font-bold">x{count}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             </div>

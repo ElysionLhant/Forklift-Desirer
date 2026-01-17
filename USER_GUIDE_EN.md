@@ -13,15 +13,19 @@ To ensure that the generated loading plans are 100% executable at docks and ware
 *   **Constraints**: The algorithm simulates the physical collision volume of a standard 1.1-meter wide forklift but introduces a **50cm Side Shift capability** and minimal wall clearance (2cm Wall Buffer). This means the system can achieve high-density loading (Squeezing boxes in) without violating physical laws.
 *   **Optimization**: v0.1.0 introduces a **Spatial Grid** collision detection system, enabling instant calculation (O(N) performance) even with 2000+ objects.
 
-### 2. Cargo Group Affinity
+### 2. Custom Container Plan
+*   **Feature**: The container count suggested by the algorithm is not mandatory. You can directly edit the number input box.
+*   **Warning System**: When you manually reduce the number of containers, causing some cargo to be left out, the system will automatically calculate the overflow and prominently display an **Insufficient Capacity** warning below the list, along with details of the unpacked items.
+
+### 3. Cargo Group Affinity
 *   **Logic**: To facilitate transport reinforcement (e.g., dunnage) and unloading, goods of the same type should be grouped together rather than scattered across the container.
 *   **Constraints**: The packing algorithm includes a "Loose Adhesion" mechanism—strict adhesion at the bottom layer, while the upper layers allow for moderate mixing to optimize fill rates without wasting space, balancing stability and efficiency.
 
-### 3. Physical Access Path & Obstacles
+### 4. Physical Access Path & Obstacles
 *   **Logic**: Cargo must be pushable from the container door to its target position without obstacles in the path.
 *   **Constraints**: The system calculates the swept path of the forklift chassis and forks in real-time. If the path is blocked by previously placed cargo, that position is deemed unreachable.
 
-### 4. Sequential Operation
+### 5. Sequential Operation
 *   **Logic**: Simulates the continuous operation of a single forklift.
 *   **Visualization**: 3D animation demonstrates the complete process from entry, lifting, side-shifting, placement to exit, including fork lifting actions to avoid lower-layer cargo.
 
