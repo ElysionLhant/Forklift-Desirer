@@ -41,6 +41,8 @@ Forklift Desirer provides a powerful manual mode for fine-tuning your loading pl
     *   **Rotate**: Middle Mouse Button drag / Left Click drag (on empty space).
     *   **Pan**: Right Mouse Button drag.
     *   **Zoom**: Mouse Wheel.
+*   **Info Tooltip**: Hover over any container for **3 seconds** to see detailed statistics (Volume, Weight, Manifest).
+    *   **Copy Info**: Press `Ctrl+C` while the tooltip is visible to copy the full manifest to clipboard.
 
 ## Native Local AI Integration
 

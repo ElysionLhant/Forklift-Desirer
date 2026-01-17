@@ -1,8 +1,8 @@
 
 import React, { useRef, useState, useMemo, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Text } from '@react-three/drei';
-import { MousePointer2 } from 'lucide-react';
+import { OrbitControls, Text, Html } from '@react-three/drei';
+import { MousePointer2, Copy } from 'lucide-react';
 import * as THREE from 'three';
 import { PlacedItem, ContainerSpec, PackingResult } from '../types';
 import { CONTAINERS } from '../constants';
@@ -16,6 +16,62 @@ interface Container3DProps {
   currentIndex: number;
   skipAnimation: boolean;
 }
+
+
+const HoverTooltip: React.FC<{
+    result: PackingResult;
+    index: number;
+    visible: boolean;
+}> = ({ result, index, visible }) => {
+    if (!visible) return null;
+
+    return (
+        <div className="bg-white/95 backdrop-blur-sm p-4 rounded-lg shadow-xl border border-gray-200 min-w-[240px] pointer-events-none select-none text-left">
+            <h4 className="font-bold text-gray-800 border-b border-gray-100 pb-2 mb-2 flex items-center justify-between">
+                <span>{result.containerType} #{index + 1}</span>
+            </h4>
+            <div className="space-y-1.5 text-xs text-gray-600">
+               <div className="grid grid-cols-2 gap-x-4">
+                   <span className="text-gray-400">Total Items:</span>
+                   <span className="font-medium text-gray-800 text-right">{result.placedItems.length}</span>
+               </div>
+               <div className="grid grid-cols-2 gap-x-4">
+                   <span className="text-gray-400">Volume:</span>
+                   <span className="font-medium text-gray-800 text-right">{result.usedVolume.toFixed(2)} m³</span>
+               </div>
+               <div className="grid grid-cols-2 gap-x-4">
+                   <span className="text-gray-400">Weight:</span>
+                   <span className="font-medium text-gray-800 text-right">{result.totalWeight} kg</span>
+               </div>
+            </div>
+            
+            <div className="mt-3 pt-2 border-t border-gray-100">
+                <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">Manifest</p>
+                <div className="max-h-[100px] overflow-hidden relative">
+                    {Object.entries(result.placedItems.reduce((acc, item) => {
+                        acc[item.name] = (acc[item.name] || 0) + 1;
+                        return acc;
+                    }, {} as Record<string, number>)).slice(0, 5).map(([name, count]) => (
+                        <div key={name} className="flex justify-between text-xs my-0.5">
+                            <span className="truncate pr-2">{name}</span>
+                            <span className="font-medium text-gray-700">x{count}</span>
+                        </div>
+                    ))}
+                    {Object.keys(result.placedItems.reduce((acc, item) => {
+                         acc[item.name] = (acc[item.name] || 0) + 1;
+                         return acc;
+                    }, {} as Record<string, number>)).length > 5 && (
+                        <div className="text-[10px] text-gray-400 mt-1 italic">...and more</div>
+                    )}
+                </div>
+            </div>
+
+            <div className="mt-2 text-[10px] text-indigo-500 flex items-center justify-center bg-indigo-50 py-1 rounded">
+                <Copy className="w-3 h-3 mr-1" /> Press Ctrl+C to copy
+            </div>
+        </div>
+    );
+};
 
 export const Container3D: React.FC<Container3DProps> = ({ container, results, viewMode, currentIndex, skipAnimation }) => {
     const layout = useMemo(() => {
@@ -37,6 +93,53 @@ export const Container3D: React.FC<Container3DProps> = ({ container, results, vi
     const [manualMode, setManualMode] = useState(false);
     const [manualLayout, setManualLayout] = useState<{ result: PackingResult, offset: THREE.Vector3, index: number }[] | null>(null);
     const [animationFinished, setAnimationFinished] = useState(false);
+    
+    // Tooltip State
+    const [hoveredContainer, setHoveredContainer] = useState<number | null>(null);
+    const [tooltipVisibleIndex, setTooltipVisibleIndex] = useState<number | null>(null);
+    const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
+    
+    // Ctrl+C Capture
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && tooltipVisibleIndex !== null) {
+                const entry = layout.find(l => l.index === tooltipVisibleIndex);
+                if (entry) {
+                    const r = entry.result;
+                    const summary = Object.entries(r.placedItems.reduce((acc, item) => {
+                        acc[item.name] = (acc[item.name] || 0) + 1;
+                        return acc;
+                    }, {} as Record<string, number>)).map(([n, c]) => `- ${n}: x${c}`).join('\n');
+
+                    const text = `Container: ${r.containerType} #${tooltipVisibleIndex + 1}\n` +
+                                 `Total Items: ${r.placedItems.length}\n` +
+                                 `Volume: ${r.usedVolume.toFixed(2)} m3 / ${r.totalVolume} m3 (${r.volumeUtilization.toFixed(1)}%)\n` +
+                                 `Weight: ${r.totalWeight} kg\n\n` +
+                                 `Manifest:\n${summary}`;
+                    navigator.clipboard.writeText(text);
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [tooltipVisibleIndex, layout]);
+
+    const handleContainerHoverEnter = (index: number) => {
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+        setHoveredContainer(index);
+        
+        hoverTimerRef.current = setTimeout(() => {
+            setTooltipVisibleIndex(index);
+        }, 3000); // 3 seconds
+    };
+
+    const handleContainerHoverLeave = (index: number) => {
+        if (hoveredContainer === index) {
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+            setHoveredContainer(null);
+            setTooltipVisibleIndex(null);
+        }
+    };
 
     useEffect(() => {
         setManualMode(false);
@@ -141,7 +244,7 @@ export const Container3D: React.FC<Container3DProps> = ({ container, results, vi
                 <directionalLight position={[10, 20, 10]} intensity={1} castShadow shadow-bias={-0.0001} />
                 <group>
                     <gridHelper args={[100, 100, 0x94a3b8, 0xe2e8f0]} position={[0, -0.01, 0]} />
-                    {layout.map(({ result, offset, index }) => {
+                    {layout.map(({ result, offset, index: resultIndex }) => {
                         const spec = CONTAINERS.find(c => c.type === result.containerType) || CONTAINERS[0];
                         const l = spec.dimensions.length * SCALE;
                         const w = spec.dimensions.width * SCALE;
@@ -149,25 +252,41 @@ export const Container3D: React.FC<Container3DProps> = ({ container, results, vi
                         const marginH = FORKLIFT_LIFT_MARGIN_CM * SCALE;
 
                         return (
-                            <group key={index}>
-                                <group position={[offset.x + l/2, offset.y + h/2 + FLOOR_HEIGHT, offset.z + w/2]}>
-                                    <lineSegments>
-                                        <edgesGeometry args={[new THREE.BoxGeometry(l, h, w)]} />
-                                        <lineBasicMaterial color="#475569" linewidth={2} />
-                                    </lineSegments>
-                                    <mesh position={[0, -h/2 - 0.02, 0]} rotation={[-Math.PI/2, 0, 0]} receiveShadow>
-                                        <planeGeometry args={[l, w]} />
-                                        <meshStandardMaterial color="#cbd5e1" />
-                                    </mesh>
-                                    {/* Forklift Margin Indicator at top */}
-                                    <mesh position={[0, (h/2) - (marginH/2), 0]}>
-                                        <boxGeometry args={[l, marginH, w]} />
-                                        <meshBasicMaterial color="#ef4444" transparent opacity={0.15} />
+                            <group key={resultIndex}>
+                                {/* Hover Trigger Group */}
+                                <group 
+                                    onPointerEnter={(e) => { e.stopPropagation(); handleContainerHoverEnter(resultIndex); }}
+                                    onPointerLeave={(e) => { e.stopPropagation(); handleContainerHoverLeave(resultIndex); }}
+                                >
+                                    <group position={[offset.x + l/2, offset.y + h/2 + FLOOR_HEIGHT, offset.z + w/2]}>
+                                        <lineSegments>
+                                            <edgesGeometry args={[new THREE.BoxGeometry(l, h, w)]} />
+                                            <lineBasicMaterial color="#475569" linewidth={2} />
+                                        </lineSegments>
+                                        <mesh position={[0, -h/2 - 0.02, 0]} rotation={[-Math.PI/2, 0, 0]} receiveShadow>
+                                            <planeGeometry args={[l, w]} />
+                                            <meshStandardMaterial color="#cbd5e1" />
+                                        </mesh>
+                                        {/* Forklift Margin Indicator at top */}
+                                        <mesh position={[0, (h/2) - (marginH/2), 0]}>
+                                            <boxGeometry args={[l, marginH, w]} />
+                                            <meshBasicMaterial color="#ef4444" transparent opacity={0.15} />
+                                        </mesh>
+                                    </group>
+                                    
+                                     {/* Tooltip Anchor */}
+                                     {tooltipVisibleIndex === resultIndex && (
+                                        <Html position={[offset.x + l/2, offset.y + h + 0.5, offset.z + w/2]} center style={{ pointerEvents: 'none' }}>
+                                            <HoverTooltip result={result} index={resultIndex} visible={true} />
+                                        </Html>
+                                    )}
+
+                                    {/* Invisible Hit Box for easier hovering on empty space inside container */}
+                                    <mesh position={[offset.x + l/2, offset.y + h/2 + FLOOR_HEIGHT, offset.z + w/2]} visible={false}> 
+                                        <boxGeometry args={[l, h, w]} />
                                     </mesh>
                                 </group>
-                                <Text position={[offset.x + l/2, offset.y + h + 1.0, offset.z + w/2]} fontSize={0.6} color="#1e293b" rotation={[0, -Math.PI/2, 0]}>
-                                    {result.containerType} #{index + 1}
-                                </Text>
+
                                 {result.placedItems.map((item, i) => (
                                     <Box 
                                         key={item.id}
