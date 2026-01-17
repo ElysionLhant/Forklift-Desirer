@@ -125,6 +125,9 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     // ----- Dragging Logic -----
 
     const handleBoxPointerDown = (e: ThreeEvent<PointerEvent>, containerIndex: number, item: PlacedItem) => {
+        if (e.button !== 0) return; // Only trigger on Left Click
+        if (e.shiftKey) return; // Allow bubbling for Box Selection (Shift + Drag)
+
         e.stopPropagation();
         // capture pointer
         (e.target as any).setPointerCapture(e.pointerId);
