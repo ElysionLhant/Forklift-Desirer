@@ -92,9 +92,10 @@ export interface BoxProps {
   animationDuration: number;
   offset: THREE.Vector3; 
   skipAnimation: boolean;
+  isSelected?: boolean;
 }
 
-export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containerWidth, animationDuration, offset, skipAnimation }) => {
+export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containerWidth, animationDuration, offset, skipAnimation, isSelected }) => {
   const groupRef = useRef<THREE.Group>(null);
   const boxMeshRef = useRef<THREE.Group>(null);
   const [showCarrier, setShowCarrier] = useState(false);
@@ -194,8 +195,14 @@ export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containe
       <group ref={boxMeshRef}>
         <mesh castShadow receiveShadow>
             <boxGeometry args={[l, h, w]} />
-            <meshStandardMaterial color={item.color} roughness={0.6} metalness={0.1} />
-            <Edges color="#333" threshold={15} />
+            <meshStandardMaterial 
+                color={item.color} 
+                roughness={0.6} 
+                metalness={0.1}
+                emissive={isSelected ? "#ffffff" : "#000000"}
+                emissiveIntensity={isSelected ? 0.4 : 0}
+            />
+            <Edges color={isSelected ? "#ffffff" : "#333"} threshold={15} />
         </mesh>
       </group>
       {showCarrier && (
