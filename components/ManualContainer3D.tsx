@@ -168,31 +168,16 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         if (!dragState.active) return;
         e.stopPropagation();
 
-        // Calculate delta
-        // We project ray to a horizontal plane passing through the startPoint's Y
-        // Actually, e.point is on the object surface if checking collisions, but if we drag it,
-        // we might lose the object?
-        // Using `e.ray` from `useThree` manually is better, but `onPointerMove` gives us raycast events.
-        // If we captured pointer, `e` continues giving events.
-        
-        // Simpler way: Calculate intersection with a plane at h = startPoint.y
         const planeY = dragState.startPoint.y;
         const raycaster = e.ray; // Ray from camera
         
-        // Ray Plane Intersection:
-        // P = O + tD
-        // P.y = planeY => O.y + t*D.y = planeY => t = (planeY - O.y) / D.y
         const t = (planeY - raycaster.origin.y) / raycaster.direction.y;
-        if (!isFinite(t)) return; // Parallel to plane
+        if (!isFinite(t)) return;
         
         const intersection = new THREE.Vector3().copy(raycaster.origin).add(raycaster.direction.multiplyScalar(t));
         
         const deltaX = intersection.x - dragState.startPoint.x;
         const deltaZ = intersection.z - dragState.startPoint.z;
-        // Convert to Local Space delta (cm)
-        // Global = Local * SCALE + Offset
-        // Local = (Global - Offset) / SCALE
-        // DeltaGlobal = DeltaLocal * SCALE => DeltaLocal = DeltaGlobal / SCALE
 
         let dLocalX = deltaX / SCALE;
         let dLocalZ = deltaZ / SCALE;
@@ -217,7 +202,6 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
             let minDZ = SNAP_THRESHOLD;
             let adjustZ = 0;
 
-            // Find best snap across all dragged items
             for (const [id, init] of dragState.initialPositions.entries()) {
                 const item = items.find(i => i.id === id);
                 if (!item) continue;
@@ -244,19 +228,106 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
             dLocalZ += adjustZ;
         }
 
-        // Update items
+        // Update items with Physics (Climbing) using World Space to allow Inter-Container interaction
         setItemsMap(prev => {
             const newMap = new Map(prev);
             const items = newMap.get(dragState.containerIndex)?.map(it => ({...it})) || [];
             
+            // 1. Prepare World Collision Boxes for ALL stationary items across ALL containers
+            // We use 'prev' map (which holds current positions) and 'layout' (which holds constant offsets)
+            const allStationaryBoxes: { 
+                minX: number, maxX: number, 
+                minZ: number, maxZ: number, 
+                topY: number 
+            }[] = [];
+
+            prev.forEach((contItems, cIndex) => {
+                 const contLayout = layout.find(l => l.index === cIndex);
+                 if(!contLayout) return;
+                 const { x: offX, y: offY, z: offZ } = contLayout.offset;
+
+                 contItems.forEach(it => {
+                     // Check if this item is the one being moved (globally unique IDs assumed, or at least unique per container)
+                     // If dragState.containerIndex == cIndex, we check against initialPositions
+                     if (cIndex === dragState.containerIndex && dragState.initialPositions.has(it.id)) return;
+
+                     const l = it.dimensions.length * SCALE;
+                     const w = it.dimensions.width * SCALE;
+                     const h = it.dimensions.height * SCALE;
+                     
+                     // Convert to World Logic Space
+                     const wx = (it.position.x * SCALE) + offX;
+                     const wy = (it.position.y * SCALE) + offY;
+                     const wz = (it.position.z * SCALE) + offZ;
+                     
+                     allStationaryBoxes.push({
+                         minX: wx, maxX: wx + l,
+                         minZ: wz, maxZ: wz + w,
+                         topY: wy + h
+                     });
+                 });
+            });
+
+            // 2. Update X/Z for moved items in the current container
             items.forEach(it => {
                 if (dragState.initialPositions.has(it.id)) {
                     const init = dragState.initialPositions.get(it.id)!;
                     it.position.x = init.x + dLocalX;
                     it.position.z = init.z + dLocalZ;
-                    // Y stays same during drag
                 }
             });
+
+            // 3. Identify and Sort moved items
+            const moved = items.filter(it => dragState.initialPositions.has(it.id));
+            moved.sort((a, b) => {
+                 const initA = dragState.initialPositions.get(a.id)!;
+                 const initB = dragState.initialPositions.get(b.id)!;
+                 return initA.y - initB.y;
+            });
+
+            // 4. Resolve Physics (Stacking/Climbing) in World Space
+            const EPSILON = 0.001 * SCALE; 
+            
+            // Current Container Offset
+            const curLayout = layout.find(l => l.index === dragState.containerIndex);
+            const curOffX = curLayout?.offset.x || 0;
+            const curOffY = curLayout?.offset.y || 0;
+            const curOffZ = curLayout?.offset.z || 0;
+
+            for (const item of moved) {
+                const l = item.dimensions.length * SCALE;
+                const h = item.dimensions.height * SCALE;
+                const w = item.dimensions.width * SCALE;
+
+                // Move item to tentative World Position (X/Z updated, Y is floor initially)
+                const wMinX = (item.position.x * SCALE) + curOffX;
+                const wMaxX = wMinX + l;
+                const wMinZ = (item.position.z * SCALE) + curOffZ;
+                const wMaxZ = wMinZ + w;
+                
+                // Base height is the floor of the CURRENT container
+                let maxH_World = curOffY; 
+
+                for (const other of allStationaryBoxes) {
+                     const intersect = (wMinX < other.maxX - EPSILON && wMaxX > other.minX + EPSILON && 
+                                        wMinZ < other.maxZ - EPSILON && wMaxZ > other.minZ + EPSILON);
+                     
+                     if (intersect) {
+                         // Stack on top
+                         if (other.topY > maxH_World) maxH_World = other.topY;
+                     }
+                }
+                
+                // Convert resolved World Y back to Local Y
+                item.position.y = (maxH_World - curOffY) / SCALE;
+                
+                // Add to stationary boxes (dynamic stacking)
+                allStationaryBoxes.push({
+                    minX: wMinX, maxX: wMaxX,
+                    minZ: wMinZ, maxZ: wMaxZ,
+                    topY: maxH_World + h
+                });
+            }
             
             newMap.set(dragState.containerIndex, items);
             return newMap;
@@ -268,62 +339,15 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         e.stopPropagation();
         (e.target as any).releasePointerCapture(e.pointerId);
 
-        // Apply Gravity
-        applyGravity(dragState.containerIndex, new Set(dragState.initialPositions.keys()));
+        // Apply Gravity is handled in real-time during move now.
+        // We just commit the final state by ending drag.
 
         setDragState(prev => ({ ...prev, active: false }));
         isBoxDraggingRef.current = false;
         if (orbitControlsRef.current) orbitControlsRef.current.enabled = true;
     };
 
-    const applyGravity = (cIndex: number, movedIds: Set<string>) => {
-        setItemsMap(prev => {
-            const newMap = new Map(prev);
-            const allItems = newMap.get(cIndex)?.map(i => ({...i})) || []; // Clone
 
-            // Separate moved items
-            const stationary = allItems.filter(i => !movedIds.has(i.id));
-            const moved = allItems.filter(i => movedIds.has(i.id));
-
-            // Sort moved items by current Y (lowest first) to enable stacking within the dragged group
-            // Though dragging usually keeps them relative, if I drag a stack, the bottom one matches criteria first.
-            moved.sort((a, b) => a.position.y - b.position.y);
-
-            // Re-integrate moved items one by one
-            const currentPlaced = [...stationary];
-
-            for (const item of moved) {
-                // Find support
-                let maxSupportH = 0;
-                const iMinX = item.position.x;
-                const iMaxX = item.position.x + item.dimensions.length;
-                const iMinZ = item.position.z;
-                const iMaxZ = item.position.z + item.dimensions.width;
-
-                for (const other of currentPlaced) {
-                    const oMinX = other.position.x;
-                    const oMaxX = other.position.x + other.dimensions.length;
-                    const oMinZ = other.position.z;
-                    const oMaxZ = other.position.z + other.dimensions.width;
-
-                    // AABB Intersection Test
-                    const intersect = (iMinX < oMaxX && iMaxX > oMinX && 
-                                       iMinZ < oMaxZ && iMaxZ > oMinZ);
-                                       
-                    if (intersect) {
-                        const topH = other.position.y + other.dimensions.height;
-                        if (topH > maxSupportH) maxSupportH = topH;
-                    }
-                }
-                
-                item.position.y = maxSupportH;
-                currentPlaced.push(item);
-            }
-
-            newMap.set(cIndex, currentPlaced);
-            return newMap;
-        });
-    };
 
 
     const handlePointerDown = (e: React.PointerEvent) => {
