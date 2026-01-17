@@ -93,9 +93,10 @@ export interface BoxProps {
   offset: THREE.Vector3; 
   skipAnimation: boolean;
   isSelected?: boolean;
+  isDragging?: boolean;
 }
 
-export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containerWidth, animationDuration, offset, skipAnimation, isSelected }) => {
+export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containerWidth, animationDuration, offset, skipAnimation, isSelected, isDragging }) => {
   const groupRef = useRef<THREE.Group>(null);
   const boxMeshRef = useRef<THREE.Group>(null);
   const [showCarrier, setShowCarrier] = useState(false);
@@ -193,7 +194,7 @@ export const Box: React.FC<BoxProps> = ({ item, delay, containerLength, containe
   return (
     <group ref={groupRef}>
       <group ref={boxMeshRef}>
-        <mesh castShadow receiveShadow>
+        <mesh castShadow receiveShadow userData={{ isDragging: isDragging, itemId: item.id }}>
             <boxGeometry args={[l, h, w]} />
             <meshStandardMaterial 
                 color={item.color} 
