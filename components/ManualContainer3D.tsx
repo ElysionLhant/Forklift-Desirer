@@ -343,6 +343,43 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
 
     // ----- Dragging Logic -----
 
+    const handleBoxDoubleClick = (e: ThreeEvent<MouseEvent>, containerIndex: number, item: PlacedItem) => {
+        e.stopPropagation();
+
+        setItemsMap(prev => {
+            const newMap = new Map(prev);
+            const items = newMap.get(containerIndex)?.map(it => {
+                if (it.id === item.id) {
+                    const newItem = { ...it };
+                    newItem.dimensions = { ...it.dimensions };
+
+                    const originalL = newItem.dimensions.length;
+                    const originalW = newItem.dimensions.width;
+
+                    // Swap
+                    newItem.dimensions.length = originalW;
+                    newItem.dimensions.width = originalL;
+                    newItem.rotation = !newItem.rotation;
+
+                    // Center rotation adjustment
+                    // newItem.position is not deep cloned above?
+                    // newItem.position = { ...it.position }; // We should clone position object too.
+                    newItem.position = { 
+                        x: newItem.position.x + (originalL - originalW) / 2,
+                        y: newItem.position.y,
+                        z: newItem.position.z + (originalW - originalL) / 2
+                    };
+
+                    return newItem;
+                }
+                return it;
+            }) || [];
+            
+            newMap.set(containerIndex, items);
+            return newMap;
+        });
+    };
+
     const handleBoxPointerDown = (e: ThreeEvent<PointerEvent>, containerIndex: number, item: PlacedItem) => {
         if (e.button !== 0) return; // Only trigger on Left Click
         if (e.shiftKey) return; // Allow bubbling for Box Selection (Shift + Drag)
@@ -769,6 +806,7 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
                                 {items.map((item, i) => (
                                     <group 
                                         key={item.id} 
+                                        onDoubleClick={(e) => handleBoxDoubleClick(e, index, item)}
                                         onPointerDown={(e) => handleBoxPointerDown(e, index, item)}
                                         onPointerMove={handleBoxPointerMove}
                                         onPointerUp={handleBoxPointerUp}

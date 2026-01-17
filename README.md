@@ -38,6 +38,8 @@ Forklift Desirer provides a powerful manual mode for fine-tuning your loading pl
 *   **Drag & Drop**: Left-click and drag items to move them within the container.
     *   **Physics Stacking**: Items will automatically "climb" onto other items if dragged over them, using real-time collision detection to prevent interpenetration.
     *   **Global Snapping**: Items snap to the edges of the container and other adjacent items (even across different containers) for precise alignment.
+*   **Double Click**:
+    *   **Rotate 90 Degrees**: Double-click an item to rotate it 90 degrees.
 *   **Selection**:
     *   **Single Select**: Click an item to select it.
     *   **Multi-Select**: Hold `Ctrl` (Windows) or `Cmd` (Mac) and click items to add them to selection.
