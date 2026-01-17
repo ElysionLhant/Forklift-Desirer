@@ -4,6 +4,12 @@
 
 The system supports **Local AI (Ollama)**, ensuring data privacy while providing intelligent packing list recognition and recommendations.
 
+## Introduction
+
+You know how boring work can be. Especially when the company won't even buy you a useful business SaaS, forcing you to calculate like a primitive human. Every time you ask AI to calculate, you have to explain complex mathematical logic—what a waste of life. Sure, companies that handle digital transformation well exist, but most of them have outdated mindsets regarding operational pain points and sales strategies.
+They are insensitive to new technologies and business types. The decision-making layer fails to understand how the complexity of B2B business can be resolved by new technologies, instead overly relying on manual judgment, causing workload to increase exponentially. They have no concept of how resolving personal work stress and pain points can feedback into efficiency. When most of your work time is spent on cognitive burdens that could be significantly optimized, it's hard to feel any sense of achievement. You no longer have time to think about how to optimize the process (this isn't the case for me, but it is for many I've observed), instead choosing to embrace it or be swallowed by it.
+Okay, enough complaining. I made this simply because I can. An acquaintance wanted to do a project on this topic, and while teaching him prompt engineering, I got addicted to it myself, resulting in this work. It took three days in total up to v1.1.0. I encountered some very disgusting edge cases and physics collision issues, but using it myself feels pretty good. So, after listening to all this nonsense, why not give it a try?
+
 ## Core Simulation & Operational Logic (Real-world Feasibility)
 
 To ensure generated loading plans are 100% executable in terminals and warehouses, we enforce strict physical constraints:
@@ -88,3 +94,19 @@ The AI service layer is rebuilt to prioritize local execution with precise data 
 ## License
 
 MIT
+
+## Support
+If you find Forklift Desirer truly helpful and it makes your boring work a little more interesting, feel free to buy me a coffee.
+
+<div align="left">
+  <!-- Ko-fi (Suitable for international users/PayPal) -->
+  <a href="https://ko-fi.com/elysionlhant" target="_blank">
+    <img src="https://storage.ko-fi.com/cdn/kofi2.png" alt="Buy Me a Coffee at ko-fi.com" height="50" >
+  </a>
+  
+  <!-- Afdian (Suitable for domestic users/WeChat & Alipay) -->
+  <a href="https://afdian.com/a/elysionlhant" target="_blank" style="margin-left: 20px;">
+    <img src="https://pic1.afdiancdn.com/static/img/logo/logo.png" alt="Afdian" height="50" >
+  </a>
+</div>
+
