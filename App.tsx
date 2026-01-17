@@ -474,10 +474,16 @@ export default function App() {
              <div className="bg-white rounded-t-xl border border-b-0 border-gray-200 p-3 flex justify-between items-center shadow-sm z-10">
                  <div className="flex items-center gap-4">
                      <div className="flex flex-col">
-                         <div className="flex items-center gap-2">
-                             <span className="text-sm font-bold text-gray-700">{currentContainerSpec?.type}</span>
-                             <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">Unit #{currentContainerIndex + 1}</span>
-                         </div>
+                         {(shipmentResults && shipmentResults.length > 0) ? (
+                             <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-gray-700">{currentContainerSpec?.type}</span>
+                                <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">Unit #{currentContainerIndex + 1}</span>
+                             </div>
+                         ) : (
+                             <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-gray-400 italic">Waiting for Cargo Manifest...</span>
+                             </div>
+                         )}
                          {shipmentResults[currentContainerIndex] && (
                              <div className="text-[10px] text-indigo-600 font-medium mt-0.5 flex items-center gap-1">
                                  <PieChart className="w-3 h-3" />

@@ -25,9 +25,9 @@ interface FormState {
 export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, onClear, onLoadDemo }) => {
   const [formData, setFormData] = useState<FormState>({
     name: '',
-    l: 120,
-    w: 80,
-    h: 100,
+    l: '',
+    w: '',
+    h: '',
     weight: '',
     qty: 1,
     unstackable: false
@@ -60,10 +60,17 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
   };
 
   const handleAdd = () => {
+    // Check if empty, use defaults? Or require input?
+    // Requirement implies "default dimensions" which means if empty, use default.
+    // So we don't error on empty l/w/h if defaults exist implicitly.
+    // However, the prompt said "Change default dimensions to gray state like other same ones... User input disappears...".
+    // I will assume defaults: 120, 80, 100.
+    
+    // Explicitly validate QTY only.
     const newErrors: Record<string, boolean> = {};
-    if (!formData.l) newErrors.l = true;
-    if (!formData.w) newErrors.w = true;
-    if (!formData.h) newErrors.h = true;
+    // if (!formData.l) newErrors.l = true; // No longer error, use default
+    // if (!formData.w) newErrors.w = true;
+    // if (!formData.h) newErrors.h = true;
     if (!formData.qty) newErrors.qty = true;
 
     if (Object.keys(newErrors).length > 0) {
@@ -73,14 +80,17 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
 
     const finalName = formData.name.trim() || `Item ${items.length + 1}`;
     const finalWeight = formData.weight === '' ? 500 : (formData.weight as number);
+    const finalL = formData.l === '' ? 120 : (formData.l as number);
+    const finalW = formData.w === '' ? 80 : (formData.w as number);
+    const finalH = formData.h === '' ? 100 : (formData.h as number);
     
     const item: CargoItem = {
       id: Math.random().toString(36).substr(2, 9),
       name: finalName,
       dimensions: { 
-          length: formData.l as number, 
-          width: formData.w as number, 
-          height: formData.h as number 
+          length: finalL, 
+          width: finalW, 
+          height: finalH 
       },
       weight: finalWeight,
       quantity: formData.qty as number,
@@ -93,12 +103,12 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
     // Reset form
     setFormData({ 
         name: '', 
-        l: 120, 
-        w: 80, 
-        h: 100, 
+        l: '', 
+        w: '', 
+        h: '', 
         weight: '', 
         qty: 1, 
-        unstackable: false
+        unstackable: false 
     });
     setErrors({});
   };
@@ -147,6 +157,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
                 type="number" 
                 className={`w-full p-2 border rounded-md text-sm ${errors.l ? 'border-red-500 bg-red-50' : ''}`}
                 value={formData.l} 
+                placeholder="120"
                 onChange={e => handleInputChange('l', e.target.value)} 
             />
         </div>
@@ -156,6 +167,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
                 type="number" 
                 className={`w-full p-2 border rounded-md text-sm ${errors.w ? 'border-red-500 bg-red-50' : ''}`}
                 value={formData.w} 
+                placeholder="80"
                 onChange={e => handleInputChange('w', e.target.value)} 
             />
         </div>
@@ -165,6 +177,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ items, onAdd, onRemove, on
                 type="number" 
                 className={`w-full p-2 border rounded-md text-sm ${errors.h ? 'border-red-500 bg-red-50' : ''}`}
                 value={formData.h} 
+                placeholder="100"
                 onChange={e => handleInputChange('h', e.target.value)} 
             />
         </div>

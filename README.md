@@ -1,97 +1,87 @@
-﻿# Forklift Desirer - 高仿真集装箱装载优化系统
+﻿# Forklift Desirer - High-Fidelity Container Loading Optimization System
 
-Forklift Desirer 是一个基于 React + Three.js 的 3D 集装箱装载可视化与规划系统。它不仅仅是一个空间堆叠工具，更是一个深度集成**物流实操规范（Real-world Logistics Constraints）**的智能决策系统。
+**Forklift Desirer** is a 3D container loading visualization and planning system based on **React + Three.js**. It goes beyond simple spatial stacking to serve as an intelligent decision-support system deeply integrated with **Real-world Logistics Constraints**.
 
-本系统支持 **Local AI (Ollama)**，确保数据隐私的同时提供智能装箱单识别与建议。
+The system supports **Local AI (Ollama)**, ensuring data privacy while providing intelligent packing list recognition and recommendations.
 
-##  核心仿真与实操逻辑 (Real-world Feasibility)
+## Core Simulation & Operational Logic (Real-world Feasibility)
 
-为了确保生成的装载方案在码头和仓库具有 100% 的可执行性，我们实施了严格的物理限制：
+To ensure generated loading plans are 100% executable in terminals and warehouses, we enforce strict physical constraints:
 
-### 1. 叉车高机动性仿真 (Skilled Forklift Operation)
-*   **逻辑**：现实中熟练的叉车工可以通过侧移器（Side Shifter）和斜向进叉来将货物推入狭窄空间。
-*   **约束**：算法模拟了标准 1.1米宽叉车的物理碰撞体积，但引入了 **50cm 的侧移能力** (Side Shift) 和极小的离墙间隙 (2cm Wall Buffer)。这意味着系统能在不违反物理法则的前提下，实现极高密度的装载（Squeezing boxes in）。
-*   **性能优化**：v0.1.0 引入了 **Spatial Grid** 碰撞检测系统，即使处理 2000+ 个物体也能在瞬间完成计算 (O(N) 性能)。
+### 1. Skilled Forklift Operation Simulation
+*   **Logic**: Skilled operators use Side Shifters and diagonal entry to maneuver cargo into tight spaces.
+*   **Constraints**: The algorithm simulates a standard 1.1m wide forklift collision volume but introduces **50cm Side Shift capability** and minimal **2cm Wall Buffer**. This allows the system to achieve high-density loading ("Squeezing boxes in") without violating physical laws.
+*   **Optimization**: v0.1.0 introduces a **Spatial Grid** collision detection system, enabling instant calculations (O(N) performance) even with 2000+ objects.
 
-### 2. 同类货物吸附 (Cargo Group Affinity)
-*   **逻辑**：为了便于运输加固（如打三角木）和卸货，同一种类的货物应尽可能靠在一起，而不是分散在集装箱两侧。
-*   **约束**：装箱算法包含"Loose Adhesion"机制，底层严格吸附，上层允许在不浪费空间的前提下适度混装，兼顾稳定性与填充率。
+### 2. Cargo Group Affinity
+*   **Logic**: For easier securing (e.g., triangular chocks) and unloading, same-type cargo should stay grouped rather than scattered.
+*   **Constraints**: The packing algorithm includes a "Loose Adhesion" mechanism—strict adhesion at the base, with relaxed mixed stacking at upper levels to balance stability and fill rate.
 
-### 3. 物理通道与避障 (Access Path & Obstacles)
-*   **逻辑**：货物必须能从集装箱门口一直推送到目标位置，路径上不能有障碍物。
-*   **约束**：系统实时计算叉车底盘和货叉的扫过路径。如果路径被先前的货物阻挡，该位置将被视为不可达。
+### 3. Physical Access Path & Obstacles
+*   **Logic**: Cargo must be transportable from the container door to its target position without obstruction.
+*   **Constraints**: The system calculates the sweep path of the forklift chassis and tines in real-time. If a path is blocked by previously placed cargo, the position is deemed unreachable.
 
-### 4. 真实作业时序 (Sequential Operation)
-*   **逻辑**：模拟单台叉车的连续作业。
-*   **可视化**：3D 动画展示从进箱、举升、侧移、放置到退出的完整过程，包括货叉为了避开下层货物而进行的抬高平推动作。
+### 4. Sequential Operation & Visualization
+*   **Logic**: Simulates the continuous operation of a single forklift.
+*   **Visualization**: Full 3D animation showing the process from entry, lifting, side-shifting, placement, to exit, including fork raising maneuvers to clear lower cargo.
 
-##  智能 AI 集成 (Local AI Native)
+## 3D Manual Operation (Manual Mode)
 
-本系统彻底重构了 AI 服务层，优先支持本地化运行，并引入了更精准的数据交互模式：
+Forklift Desirer provides a powerful manual mode for fine-tuning your loading plan with physics-assisted interactions.
 
-*   **双模式智能判定 (Dual-Mode Intelligence)**：系统会自动识别用户意图。如果输入包含货物数据，系统将自动切换至**数据提取模式 (Data Extraction Mode)**，进行严格的 JSON 格式化提取；如果用户进行物流咨询，则切换至**专家顾问模式 (Advisor Mode)**。
-*   **外部 LLM 协作 (External LLM Support)**：
-    *   **复制定义 (Copy Prompt)**：对于没有本地强力模型或无 API 的用户，提供一键复制 "System Prompt" 功能。您可以将此 Prompt 发送给 ChatGPT/Claude 等外部最强模型。
-    *   **手动导入 (Manual Import)**：支持将外部模型生成的 JSON 直接粘贴回系统，立刻生成可视化方案。
-*   **Local AI (Ollama)**：默认支持连接本地 Ollama 服务（自动检测模型，如 `llama3`, `qwen` 等）。无数据上传风险，零 API 成本。
-*   **OpenAI Compatible**：同时支持任何兼容 OpenAI 接口的云端或本地服务（如 LM Studio）。
-*   **功能**：AI 用于自然语言处理，包括解析混乱的装箱单文本、转换尺寸单位、提取货物元数据等。
-*   **图像识别 (New)**：可以直接**拖拽装箱单图片**到 AI 对话框，自动识别并提取货物信息（需配合支持视觉的多模态模型）。
+*   **Drag & Drop**: Left-click and drag items to move them within the container.
+    *   **Physics Stacking**: Items will automatically "climb" onto other items if dragged over them, using real-time collision detection to prevent interpenetration.
+    *   **Global Snapping**: Items snap to the edges of the container and other adjacent items (even across different containers) for precise alignment.
+*   **Selection**:
+    *   **Single Select**: Click an item to select it.
+    *   **Multi-Select**: Hold `Ctrl` (Windows) or `Cmd` (Mac) and click items to add them to selection.
+    *   **Box Selection**: Hold `Shift` and drag on the background (or over items) to draw a selection box.
+    *   **Deselect**: Click on empty space to clear selection.
+*   **Camera Controls**:
+    *   **Rotate**: Middle Mouse Button drag / Left Click drag (on empty space).
+    *   **Pan**: Right Mouse Button drag.
+    *   **Zoom**: Mouse Wheel.
 
-##  技术栈 (Tech Stack)
+## Native Local AI Integration
+
+The AI service layer is rebuilt to prioritize local execution with precise data interaction:
+
+*   **Dual-Mode Intelligence**: Automatically detects user intent. It switches to **Data Extraction Mode** for cargo lists (strict JSON formatting) and **Advisor Mode** for logistics questions.
+*   **External LLM Support**:
+    *   **Copy Prompt**: For users without local models, copy the "System Prompt" to use with ChatGPT/Claude.
+    *   **Manual Import**: Paste external model JSON output directly into the system for instant visualization.
+*   **Local AI (Ollama)**: Supports local Ollama services (e.g., `llama3`, `qwen`). No data upload, zero cost.
+*   **OpenAI Compatible**: Supports any OpenAI-compatible cloud or local service (e.g., LM Studio).
+*   **Visual Recognition**: Drag and drop packing list images into the chat for automatic text/table extraction (requires multimodal model).
+
+## Tech Stack
 
 *   **Frontend**: React, Vite, TypeScript
 *   **3D Engine**: Three.js, @react-three/fiber, @react-three/drei
 *   **Desktop Shell**: Electron
-*   **Algorithm**: 带有物理约束的启发式 3D 装箱算法 (Heuristic 3D Bin Packing with Constraints), 优化 Spatial Grid (O(N) 复杂度)
+*   **Algorithm**: Heuristic 3D Bin Packing with Constraints, Optimized Spatial Grid (O(N))
 *   **State Management**: React Hooks + Context
 *   **Styling**: Tailwind CSS
 
-##  快速开始 (Quick Start)
+## Quick Start
 
-### 下载与安装 (Release)
-推荐直接下载编译好的可执行文件，无需配置开发环境：
-1. 前往 `release/` 目录 (或 GitHub Releases 页面)。
-2. 下载 `Forklift Desirer Setup.exe`。
-3. 安装并运行。
-
-### 开发环境 (Development)
-如果您想修改代码或参与贡献：
-*   Node.js (v18+)
-*   Ollama (可选，用于本地 AI 功能)
-
-### 安装与运行
-
-1.  **克隆项目**
+1.  **Clone & Install**:
     ```bash
-    git clone <repo_url>
+    git clone https://github.com/your-repo/Forklift-Desirer.git
     cd Forklift-Desirer
-    ```
-
-2.  **安装依赖**
-    ```bash
     npm install
     ```
-
-3.  **启动开发服务器**
+2.  **Dev Mode**:
     ```bash
     npm run dev
+    # or for Electron
+    npm run electron:dev
     ```
-    访问 `http://localhost:5173` 即可使用。本系统完全在本地运行 (Localhost Only)，无需外部网络连接。
-
-4.  **启动本地 AI (可选)**
-    确保 Ollama 已安装并运行（默认监听 `localhost:11434`）：
+3.  **Build**:
     ```bash
-    ollama serve
-    # 并在设置中把 Model Provider 切换为 Local (Ollama)
+    npm run build
     ```
 
-##  使用建议
+## License
 
-1.  **添加货物**：手动输入或通过 AI 聊天窗口粘贴装箱单文本。
-2.  **3D 交互**：
-    *   左键旋转，右键平移，滚轮缩放。
-    *   **Edges**：开启了边缘显示，更清晰地分辨堆叠的货物。
-3.  **设置与调优**：
-    *   点击右上角设置图标配置 AI 模型。
-    *   调整集装箱尺寸以适配不同柜型（20GP, 40HQ 等）。
+MIT
