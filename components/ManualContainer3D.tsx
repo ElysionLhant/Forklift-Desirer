@@ -162,6 +162,8 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         isBoxDraggingRef.current = true;
     };
 
+    const SNAP_THRESHOLD = 5; // cm
+
     const handleBoxPointerMove = (e: ThreeEvent<PointerEvent>) => {
         if (!dragState.active) return;
         e.stopPropagation();
@@ -192,8 +194,55 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         // Local = (Global - Offset) / SCALE
         // DeltaGlobal = DeltaLocal * SCALE => DeltaLocal = DeltaGlobal / SCALE
 
-        const dLocalX = deltaX / SCALE;
-        const dLocalZ = deltaZ / SCALE;
+        let dLocalX = deltaX / SCALE;
+        let dLocalZ = deltaZ / SCALE;
+
+        // Snapping logic
+        const layoutEntry = layout.find(l => l.index === dragState.containerIndex);
+        if (layoutEntry) {
+            const spec = CONTAINERS.find(c => c.type === layoutEntry.result.containerType) || CONTAINERS[0];
+            const items = itemsMap.get(dragState.containerIndex) || [];
+            const stationary = items.filter(it => !dragState.initialPositions.has(it.id));
+
+            // Candidate snap lines
+            const snapX = [0, spec.dimensions.length];
+            const snapZ = [0, spec.dimensions.width];
+            stationary.forEach(s => {
+                snapX.push(s.position.x, s.position.x + s.dimensions.length);
+                snapZ.push(s.position.z, s.position.z + s.dimensions.width);
+            });
+
+            let minDX = SNAP_THRESHOLD;
+            let adjustX = 0;
+            let minDZ = SNAP_THRESHOLD;
+            let adjustZ = 0;
+
+            // Find best snap across all dragged items
+            for (const [id, init] of dragState.initialPositions.entries()) {
+                const item = items.find(i => i.id === id);
+                if (!item) continue;
+                
+                const curXMin = init.x + dLocalX;
+                const curXMax = curXMin + item.dimensions.length;
+                const curZMin = init.z + dLocalZ;
+                const curZMax = curZMin + item.dimensions.width;
+
+                for (const sx of snapX) {
+                    const d1 = sx - curXMin;
+                    if (Math.abs(d1) < minDX) { minDX = Math.abs(d1); adjustX = d1; }
+                    const d2 = sx - curXMax;
+                    if (Math.abs(d2) < minDX) { minDX = Math.abs(d2); adjustX = d2; }
+                }
+                for (const sz of snapZ) {
+                    const d1 = sz - curZMin;
+                    if (Math.abs(d1) < minDZ) { minDZ = Math.abs(d1); adjustZ = d1; }
+                    const d2 = sz - curZMax;
+                    if (Math.abs(d2) < minDZ) { minDZ = Math.abs(d2); adjustZ = d2; }
+                }
+            }
+            dLocalX += adjustX;
+            dLocalZ += adjustZ;
+        }
 
         // Update items
         setItemsMap(prev => {
