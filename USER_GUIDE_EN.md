@@ -43,6 +43,7 @@ Forklift Desirer offers a powerful manual fine-tuning mode that supports interac
     *   **Zoom**: Scroll Mouse Wheel.
 *   **Info Tooltip**: Hover the mouse over a container for **3 seconds** to display detailed statistics (Volume, Weight, Cargo Manifest).
     *   **Copy Info**: Press `Ctrl+C` while the tooltip is visible to copy the complete manifest to the clipboard.
+    *   **Undo**: Press `Ctrl+Z` to undo the last move operation.
 
 ## Intelligent AI Integration (Local AI Native)
 

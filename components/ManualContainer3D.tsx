@@ -107,6 +107,15 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     // Map container index to its items (modifiable state)
     const [itemsMap, setItemsMap] = useState<Map<number, PlacedItem[]>>(new Map());
 
+    // Undo History
+    interface HistoryAction {
+        containerIndex: number;
+        moves: { id: string; pos: { x: number; y: number; z: number } }[];
+    }
+    const [history, setHistory] = useState<HistoryAction[]>([]);
+    // historyRef is defined further down with other Refs
+    const hasDragMovedRef = useRef(false);
+
     // Derived state: Iterate all items to see which Container bounds they fall into.
     const derivedContents = React.useMemo(() => {
         const contents = new Map<number, PlacedItem[]>();
@@ -151,38 +160,91 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     const [tooltipVisibleIndex, setTooltipVisibleIndex] = useState<number | null>(null);
     const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Ctrl+C Capture
+    // Refs for Global Event Listeners (to avoid thrashing)
+    const layoutRef = useRef(layout);
+    const itemsMapRef = useRef(itemsMap);
+    const historyRef = useRef(history);
+    const derivedContentsRef = useRef(derivedContents);
+    const tooltipVisibleIndexRef = useRef(tooltipVisibleIndex);
+
+    // Sync Refs
+    useEffect(() => { layoutRef.current = layout; }, [layout]);
+    useEffect(() => { itemsMapRef.current = itemsMap; }, [itemsMap]);
+    useEffect(() => { historyRef.current = history; }, [history]);
+    useEffect(() => { derivedContentsRef.current = derivedContents; }, [derivedContents]);
+    useEffect(() => { tooltipVisibleIndexRef.current = tooltipVisibleIndex; }, [tooltipVisibleIndex]);
+
+    // Ctrl+C and Ctrl+Z Global Handler
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'c' && tooltipVisibleIndex !== null) {
-                const entry = layout.find(l => l.index === tooltipVisibleIndex);
-                if (entry) {
-                    const r = entry.result;
-                    const liveItems = derivedContents.get(tooltipVisibleIndex) || [];
+            // Ignore if input/textarea is focused
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-                    // Calculate real-time stats
-                    const totalItems = liveItems.length;
-                    const usedVolume = liveItems.reduce((acc, item) => acc + (item.dimensions.length * item.dimensions.width * item.dimensions.height), 0) / 1000000;
-                    const totalWeight = liveItems.reduce((acc, item) => acc + item.weight, 0);
-                    const volumeUtilization = (usedVolume / r.totalVolume) * 100;
+            if (e.ctrlKey || e.metaKey) {
+                const key = e.key.toLowerCase();
+                
+                // Ctrl + C: Copy Manifest
+                if (key === 'c') {
+                    const idx = tooltipVisibleIndexRef.current;
+                    if (idx !== null) {
+                         const entry = layoutRef.current.find(l => l.index === idx);
+                         if (entry) {
+                            const r = entry.result;
+                            const liveItems = derivedContentsRef.current.get(idx) || [];
+                            
+                            // Stats calculation
+                            const totalItems = liveItems.length;
+                            const usedVolume = liveItems.reduce((acc, item) => acc + (item.dimensions.length * item.dimensions.width * item.dimensions.height), 0) / 1000000;
+                            const totalWeight = liveItems.reduce((acc, item) => acc + item.weight, 0);
+                            const volumeUtilization = (usedVolume / r.totalVolume) * 100;
+                            
+                            const summary = Object.entries(liveItems.reduce((acc, item) => {
+                                acc[item.name] = (acc[item.name] || 0) + 1;
+                                return acc;
+                            }, {} as Record<string, number>)).map(([n, c]) => `- ${n}: x${c}`).join('\n');
 
-                    const summary = Object.entries(liveItems.reduce((acc, item) => {
-                        acc[item.name] = (acc[item.name] || 0) + 1;
-                        return acc;
-                    }, {} as Record<string, number>)).map(([n, c]) => `- ${n}: x${c}`).join('\n');
-
-                    const text = `Container: ${r.containerType} #${tooltipVisibleIndex + 1}\n` +
-                                 `Total Items: ${totalItems}\n` +
-                                 `Volume: ${usedVolume.toFixed(2)} m3 / ${r.totalVolume} m3 (${volumeUtilization.toFixed(1)}%)\n` +
-                                 `Weight: ${totalWeight} kg\n\n` +
-                                 `Manifest:\n${summary}`;
-                    navigator.clipboard.writeText(text);
+                            const text = `Container: ${r.containerType} #${idx + 1}\n` +
+                                         `Total Items: ${totalItems}\n` +
+                                         `Volume: ${usedVolume.toFixed(2)} m3 / ${r.totalVolume} m3 (${volumeUtilization.toFixed(1)}%)\n` +
+                                         `Weight: ${totalWeight} kg\n\n` +
+                                         `Manifest:\n${summary}`;
+                            navigator.clipboard.writeText(text);
+                         }
+                    }
+                }
+                // Ctrl + Z: Undo
+                else if (key === 'z') {
+                     e.preventDefault();
+                     const currentHistory = historyRef.current;
+                     if (currentHistory.length > 0) {
+                         const newHistory = [...currentHistory];
+                         const action = newHistory.pop();
+                         if (action) {
+                             // Restore specific items
+                             setItemsMap(prev => {
+                                 const newMap = new Map(prev);
+                                 const items = newMap.get(action.containerIndex)?.map(it => ({...it})) || [];
+                                 
+                                 action.moves.forEach(move => {
+                                     const target = items.find(it => it.id === move.id);
+                                     if (target) {
+                                         target.position = { ...move.pos };
+                                     }
+                                 });
+                                 
+                                 newMap.set(action.containerIndex, items);
+                                 return newMap;
+                             });
+                             setHistory(newHistory);
+                         }
+                     }
                 }
             }
         };
+
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [tooltipVisibleIndex, layout, derivedContents]);
+    }, []); // Empty dependency array = Stable Listener
 
     // Drag State
     const [dragState, setDragState] = useState<DragState>({ active: false, startPoint: new THREE.Vector3(), initialPositions: new Map(), containerIndex: -1 });
@@ -303,6 +365,9 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         // Disable OrbitControls
         if (orbitControlsRef.current) orbitControlsRef.current.enabled = false;
 
+        // Reset Move Flag
+        hasDragMovedRef.current = false;
+
         // Prepare initial positions for all dragged items
         const initialPos = new Map<string, {x:number, y:number, z:number}>();
         const items = itemsMap.get(containerIndex) || [];
@@ -327,6 +392,8 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
     const handleBoxPointerMove = (e: ThreeEvent<PointerEvent>) => {
         if (!dragState.active) return;
         e.stopPropagation();
+
+        hasDragMovedRef.current = true;
 
         const planeY = dragState.startPoint.y;
         const raycaster = e.ray; // Ray from camera
@@ -554,6 +621,19 @@ export const ManualContainer3D: React.FC<ManualContainer3DProps> = ({ layout }) 
         if (!dragState.active) return;
         e.stopPropagation();
         (e.target as any).releasePointerCapture(e.pointerId);
+
+        // Commit History: Only if drag was active, we moved something
+        if (hasDragMovedRef.current) {
+             const moves: { id: string; pos: { x: number; y: number; z: number } }[] = [];
+             dragState.initialPositions.forEach((pos, id) => {
+                 moves.push({ id, pos: { ...pos } });
+             });
+             
+             setHistory(prev => [...prev, { 
+                 containerIndex: dragState.containerIndex, 
+                 moves 
+             }]);
+        }
 
         // Apply Gravity is handled in real-time during move now.
         // We just commit the final state by ending drag.
