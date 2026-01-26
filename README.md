@@ -35,6 +35,8 @@ To ensure generated loading plans are 100% executable in terminals and warehouse
 *   **Logic**: Simulates the continuous operation of a single forklift.
 *   **Visualization**: Full 3D animation showing the process from entry, lifting, side-shifting, placement, to exit, including fork raising maneuvers to clear lower cargo.
 
+![Animation 1](动画1.gif)
+
 ## 3D Manual Operation (Manual Mode)
 
 Forklift Desirer provides a powerful manual mode for fine-tuning your loading plan with physics-assisted interactions.
@@ -56,6 +58,8 @@ Forklift Desirer provides a powerful manual mode for fine-tuning your loading pl
 *   **Info Tooltip**: Hover over any container for **3 seconds** to see detailed statistics (Volume, Weight, Manifest).
     *   **Copy Info**: Press `Ctrl+C` while the tooltip is visible to copy the full manifest to clipboard.
     *   **Undo**: Press `Ctrl+Z` to undo the last move operation.
+
+![Animation 2](动画2.gif)
 
 ## Native Local AI Integration
 
